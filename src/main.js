@@ -16,8 +16,9 @@ const dayFog   = new THREE.Color("#8cb8d8");
 const nightFog = new THREE.Color("#060b18");
 const tempColor = new THREE.Color();
 
+// #20: Narrower FOV for more dramatic perspective
 const camera = new THREE.PerspectiveCamera(
-  62, window.innerWidth / window.innerHeight, 0.5, 2600
+  55, window.innerWidth / window.innerHeight, 0.5, 2600
 );
 
 const renderer = new THREE.WebGLRenderer({
@@ -79,19 +80,19 @@ const starMat = new THREE.PointsMaterial({
 const stars = new THREE.Points(starGeo, starMat);
 scene.add(stars);
 
-// ── Moon ─────────────────────────────────────────────────────────────────
+// ── #6: Moon — lower position visible from street level between buildings ─
 const moonMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(26, 32, 32),
+  new THREE.SphereGeometry(35, 32, 32),
   new THREE.MeshStandardMaterial({
     color: "#d8eaff", emissive: "#88b0d8", emissiveIntensity: 1.2,
     roughness: 1.0, metalness: 0.0
   })
 );
-moonMesh.position.set(-520, 460, -720);
+moonMesh.position.set(-200, 180, -500);
 scene.add(moonMesh);
 
 const moonGlow = new THREE.Mesh(
-  new THREE.SphereGeometry(44, 32, 32),
+  new THREE.SphereGeometry(55, 32, 32),
   new THREE.MeshBasicMaterial({
     color: "#2858a8", transparent: true, opacity: 0.18,
     side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false
@@ -148,20 +149,21 @@ sunLight.shadow.camera.top = 600;
 sunLight.shadow.camera.bottom = -600;
 scene.add(sunLight);
 
+// #14: Accent lights lowered to street level for camera at y=6
 const rimLight = new THREE.PointLight("#ff4fd8", 35, 1200, 2);
-rimLight.position.set(0, 130, 0);
+rimLight.position.set(0, 40, 0);
 scene.add(rimLight);
 
 const fillLight = new THREE.PointLight("#2fbfff", 25, 1400, 2);
-fillLight.position.set(0, 180, 240);
+fillLight.position.set(0, 35, 240);
 scene.add(fillLight);
 
 const skyLight = new THREE.PointLight("#19f9ff", 50, 1800, 2);
-skyLight.position.set(0, 300, 0);
+skyLight.position.set(0, 50, 0);
 scene.add(skyLight);
 
 const magentaLight = new THREE.PointLight("#ff4fd8", 45, 1600, 2);
-magentaLight.position.set(-300, 260, -180);
+magentaLight.position.set(-300, 45, -180);
 scene.add(magentaLight);
 
 // ── Scene objects ────────────────────────────────────────────────────────
@@ -200,13 +202,13 @@ function animate() {
   atmosphere.update(elapsedTime, camera.position, nightFactor);
   clouds.update(elapsedTime, camera.position, daylight);
 
-  // Sky & fog — richer daylight colors
+  // Sky & fog
   scene.background.copy(tempColor.copy(nightSky).lerp(daySky, daylight));
   scene.fog.color.copy(tempColor.copy(nightFog).lerp(dayFog, daylight));
   scene.fog.near = 120 + daylight * 200;
   scene.fog.far = 1200 + daylight * 600;
 
-  // Swap environment map based on day/night
+  // Swap environment map
   if (daylight > 0.5 && dayEnvMap) {
     scene.environment = dayEnvMap;
   } else if (nightEnvMap) {
@@ -220,17 +222,17 @@ function animate() {
   sunMesh.material.opacity = daylight * 0.98;
   sunHalo.material.opacity = daylight * 0.42;
 
-  // Exposure — brighter during day
+  // Exposure
   renderer.toneMappingExposure = 0.55 + daylight * 0.65 + nightFactor * 0.15;
 
-  // Bloom — less during day for realism, more at night for neon glow
+  // #10: Bloom — lower threshold at night so neon elements glow properly
   post.setBloom(
-    0.04 + nightFactor * 0.34,
-    0.20 + nightFactor * 0.20,
-    0.80 - nightFactor * 0.20
+    0.06 + nightFactor * 0.40,     // strength: stronger at night
+    0.25 + nightFactor * 0.25,     // radius: wider at night
+    0.65 - nightFactor * 0.30      // threshold: 0.65 day → 0.35 night
   );
 
-  // Lights — sun stronger during day, moon at night
+  // Lights
   ambientLight.intensity = 0.35 + daylight * 1.2;
   ambientLight.color.setHSL(0.56, 0.7 - daylight * 0.3, 0.72 - nightFactor * 0.18);
   moonLight.intensity = 0.4 + nightFactor * 2.5;
@@ -240,23 +242,30 @@ function animate() {
   skyLight.intensity = 2 + nightFactor * 42;
   magentaLight.intensity = 2 + nightFactor * 35;
 
-  // Rain intensity — heavier at night
+  // Rain
   rain.object.material.opacity = 0.04 + nightFactor * 0.08;
 
-  // Orbit accent lights
+  // #14: Orbit accent lights at lower altitude
   rimLight.position.x = Math.sin(elapsedTime * 0.12) * 300;
+  rimLight.position.y = 40;
   rimLight.position.z = Math.cos(elapsedTime * 0.12) * 300;
   fillLight.position.x = Math.cos(elapsedTime * 0.08) * 220;
+  fillLight.position.y = 35;
   fillLight.position.z = 220 + Math.sin(elapsedTime * 0.08) * 160;
   skyLight.position.x = Math.sin(elapsedTime * 0.05) * 160;
+  skyLight.position.y = 50;
   skyLight.position.z = Math.cos(elapsedTime * 0.05) * 160;
   magentaLight.position.x = -300 + Math.cos(elapsedTime * 0.06) * 120;
+  magentaLight.position.y = 45;
   magentaLight.position.z = -180 + Math.sin(elapsedTime * 0.06) * 120;
 
-  // Environment map intensity based on time of day
+  // Environment map intensity
   if (scene.environment) {
     scene.environmentIntensity = 0.4 + daylight * 0.6;
   }
+
+  // #19: Update cinematic shader time
+  post.updateTime(elapsedTime);
 
   post.composer.render();
   requestAnimationFrame(animate);

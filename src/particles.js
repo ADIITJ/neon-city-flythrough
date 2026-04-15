@@ -17,13 +17,9 @@ function createCloudTexture() {
     context.beginPath();
     context.fillStyle = `rgba(255,255,255,${0.08 + Math.random() * 0.08})`;
     context.ellipse(
-      40 + Math.random() * 180,
-      30 + Math.random() * 60,
-      20 + Math.random() * 48,
-      12 + Math.random() * 24,
-      Math.random() * Math.PI,
-      0,
-      Math.PI * 2
+      40 + Math.random() * 180, 30 + Math.random() * 60,
+      20 + Math.random() * 48, 12 + Math.random() * 24,
+      Math.random() * Math.PI, 0, Math.PI * 2
     );
     context.fill();
   }
@@ -33,16 +29,17 @@ function createCloudTexture() {
   return texture;
 }
 
+// #9: Rain — more particles, larger, tighter around camera
 export function createRainSystem() {
-  const count = 1200;
+  const count = 3000;
   const positions = new Float32Array(count * 3);
   const velocities = new Float32Array(count);
   const geometry = new THREE.BufferGeometry();
 
   for (let i = 0; i < count; i += 1) {
-    positions[i * 3 + 0] = (Math.random() - 0.5) * 1500;
-    positions[i * 3 + 1] = Math.random() * 400;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 1500;
+    positions[i * 3 + 0] = (Math.random() - 0.5) * 600;
+    positions[i * 3 + 1] = Math.random() * 300;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 600;
     velocities[i] = 130 + Math.random() * 160;
   }
 
@@ -50,7 +47,7 @@ export function createRainSystem() {
 
   const material = new THREE.PointsMaterial({
     color: "#87d9ff",
-    size: 0.14,
+    size: 0.25,
     transparent: true,
     opacity: 0.1,
     depthWrite: false,
@@ -70,9 +67,9 @@ export function createRainSystem() {
         position.array[i * 3 + 2] += Math.cos(i * 4.123) * delta * 10;
 
         if (position.array[i * 3 + 1] < 0) {
-          position.array[i * 3 + 1] = 320 + Math.random() * 120;
-          position.array[i * 3 + 0] = (Math.random() - 0.5) * 900;
-          position.array[i * 3 + 2] = (Math.random() - 0.5) * 900;
+          position.array[i * 3 + 1] = 200 + Math.random() * 100;
+          position.array[i * 3 + 0] = (Math.random() - 0.5) * 300;
+          position.array[i * 3 + 2] = (Math.random() - 0.5) * 300;
         }
       }
 
@@ -92,9 +89,9 @@ export function createAtmosphereLayers(scene) {
   const dustGeometry = new THREE.BufferGeometry();
 
   for (let i = 0; i < dustCount; i += 1) {
-    dustPositions[i * 3 + 0] = (Math.random() - 0.5) * 900;
-    dustPositions[i * 3 + 1] = Math.random() * 250;
-    dustPositions[i * 3 + 2] = (Math.random() - 0.5) * 900;
+    dustPositions[i * 3 + 0] = (Math.random() - 0.5) * 600;
+    dustPositions[i * 3 + 1] = Math.random() * 100;
+    dustPositions[i * 3 + 2] = (Math.random() - 0.5) * 600;
 
     const color = sampleNeon(i, -0.25);
     dustColors[i * 3 + 0] = color.r;
@@ -122,12 +119,13 @@ export function createAtmosphereLayers(scene) {
     group,
     update(elapsedTime, cameraPosition, mood = 0) {
       dust.rotation.y = elapsedTime * 0.02;
-      dust.position.set(cameraPosition.x, 40, cameraPosition.z);
-      dust.material.opacity = 0.005 + mood * 0.012;
+      dust.position.set(cameraPosition.x, 20, cameraPosition.z);
+      dust.material.opacity = 0.005 + mood * 0.015;
     }
   };
 }
 
+// #7: Clouds — lower altitude, more count, higher opacity
 export function createCloudLayer(scene) {
   const group = new THREE.Group();
   scene.add(group);
@@ -136,7 +134,7 @@ export function createCloudLayer(scene) {
   const clouds = [];
   const tempVector = new THREE.Vector3();
 
-  for (let i = 0; i < 14; i += 1) {
+  for (let i = 0; i < 28; i += 1) {
     const material = new THREE.MeshBasicMaterial({
       map: texture,
       color: new THREE.Color("#ffffff"),
@@ -145,14 +143,14 @@ export function createCloudLayer(scene) {
       depthWrite: false,
       blending: THREE.NormalBlending
     });
-    const cloud = new THREE.Mesh(new THREE.PlaneGeometry(150, 70), material);
+    const cloud = new THREE.Mesh(new THREE.PlaneGeometry(180, 80), material);
     cloud.position.set(
-      (Math.random() - 0.5) * 1800,
-      620 + Math.random() * 200,
-      (Math.random() - 0.5) * 1800
+      (Math.random() - 0.5) * 1200,
+      220 + Math.random() * 180,
+      (Math.random() - 0.5) * 1200
     );
     cloud.rotation.z = Math.random() * Math.PI * 2;
-    const scale = 0.7 + Math.random() * 1.8;
+    const scale = 0.7 + Math.random() * 2.0;
     cloud.scale.setScalar(scale);
     group.add(cloud);
     clouds.push({
@@ -175,7 +173,8 @@ export function createCloudLayer(scene) {
         tempVector.set(cameraPosition.x, item.mesh.position.y - 40, cameraPosition.z);
         item.mesh.lookAt(tempVector);
         item.mesh.material.color.setHSL(0.58, 0.08, 0.72 + sunStrength * 0.18);
-        item.mesh.material.opacity = 0.006 + sunStrength * 0.055;
+        // #7: Higher opacity so clouds are actually visible
+        item.mesh.material.opacity = 0.03 + sunStrength * 0.10;
       }
     }
   };
