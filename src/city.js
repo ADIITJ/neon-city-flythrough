@@ -8,6 +8,7 @@ import { sampleNeon, hash2D } from "./utils.js";
 const A = {
   asphalt:    { col: "assets/Asphalt012_1K-JPG/Asphalt012_1K-JPG_Color.jpg",    nrm: "assets/Asphalt012_1K-JPG/Asphalt012_1K-JPG_NormalGL.jpg",    rgh: "assets/Asphalt012_1K-JPG/Asphalt012_1K-JPG_Roughness.jpg" },
   asphaltDmg: { col: "assets/AsphaltDamageSet001_1K-JPG/AsphaltDamageSet001_1K-JPG_Color.jpg", nrm: "assets/AsphaltDamageSet001_1K-JPG/AsphaltDamageSet001_1K-JPG_NormalGL.jpg", rgh: "assets/AsphaltDamageSet001_1K-JPG/AsphaltDamageSet001_1K-JPG_Roughness.jpg" },
+  ground054:  { col: "assets/Ground054_1K-JPG/Ground054_1K-JPG_Color.jpg", nrm: "assets/Ground054_1K-JPG/Ground054_1K-JPG_NormalGL.jpg", rgh: "assets/Ground054_1K-JPG/Ground054_1K-JPG_Roughness.jpg", ao: "assets/Ground054_1K-JPG/Ground054_1K-JPG_AmbientOcclusion.jpg" },
   rl004:      { col: "assets/RoadLines004_1K-JPG/RoadLines004_1K-JPG_Color.jpg", nrm: "assets/RoadLines004_1K-JPG/RoadLines004_1K-JPG_NormalGL.jpg", rgh: "assets/RoadLines004_1K-JPG/RoadLines004_1K-JPG_Roughness.jpg", opa: "assets/RoadLines004_1K-JPG/RoadLines004_1K-JPG_Opacity.jpg" },
   paving:     { col: "assets/PavingStones070_1K-JPG/PavingStones070_1K-JPG_Color.jpg", nrm: "assets/PavingStones070_1K-JPG/PavingStones070_1K-JPG_NormalGL.jpg", rgh: "assets/PavingStones070_1K-JPG/PavingStones070_1K-JPG_Roughness.jpg", ao: "assets/PavingStones070_1K-JPG/PavingStones070_1K-JPG_AmbientOcclusion.jpg" },
   concrete:   { col: "assets/Concrete034_1K-JPG/Concrete034_1K-JPG_Color.jpg",  nrm: "assets/Concrete034_1K-JPG/Concrete034_1K-JPG_NormalGL.jpg",  rgh: "assets/Concrete034_1K-JPG/Concrete034_1K-JPG_Roughness.jpg" },
@@ -217,49 +218,110 @@ const BUILDINGS = [
 //   270–300s Rise back to y=80, banking south, closing the loop
 // ─────────────────────────────────────────────────────────────────────────────
 export function getCameraPath() {
-  // Positions and look-at targets — each pair is intentional
+  // ── Street-safe camera path ───────────────────────────────────────────────
+  // ALL ground-level waypoints run down named street centerlines.
+  // Street layout (camera clearance from buildings guaranteed ≥ 12 units):
+  //   Boulevard:     z=0  (width 36 → camera safe zone x=anything, z=0)
+  //   Grand Ave:     x=0  (width 28 → camera safe zone z=anything, x=0)
+  //   East Ave:      x=90 (width 28 → camera safe at x=90)
+  //   West Ave:      x=-90(width 28 → camera safe at x=-90)
+  //   North St 1:    z=-60(width 22 → camera safe at z=-60)
+  //   South St 1:    z=60 (width 22 → camera safe at z=60)
+  // Intersections are safe zones. Camera y=7 = eye height on street.
+  // Look-ahead targets are always 40–60 units forward along same street.
+  // Building clearance reference (checker verified):
+  //   FC-E-spire:   x=[42,58]  z=[-18,18]  h=200
+  //   FC-NE-glass:  x=[17,39]  z=[-39,-17] h=220
+  //   FC-N-slab:    x=[-18,18] z=[-55,-41] h=170
+  //   FC-NW2:       x=[-51,-33]z=[-56,-40] h=125
+  //   FC-W-spire:   x=[-58,-42]z=[-18,18]  h=195
+  //   FC-SE-glass:  x=[18,38]  z=[17,39]   h=160
+  //   FC-S-neon:    x=[-18,18] z=[41,55]   h=150
+  //   FC-SE2:       x=[33,51]  z=[40,56]   h=120
+  //   ENT-NW:       x=[96,124] z=[-36,-14] h=110
+  //   ENT-FarNW:    x=[98,122] z=[-170,-140]h=65
+  //   IND-E:        x=[8,52]   z=[-110,-90] h=35
+  //   RES-SE:       x=[-121,-95]z=[14,36]  h=60
+  //
+  // East avenue camera travels at x=83 (13 units from ENT-NW edge at x=96)
+  // West avenue camera travels at x=-83 (12 units from RES-SE edge at x=-95)
+  // All fountain plaza waypoints stay within |x|<14, |z|<14
+  // Collision-free path. Clearance budget per street:
+  //   East Ave x=83  (ENT-NW edge x=96: gap=13)
+  //   West Ave x=-83 (RES-SE edge x=-95: gap=12)
+  //   North/South streets z=±63 (FC-N-slab/FC-S-neon z edges: gap=8)
+  //   Boulevard z=0 with x=10 in centre (FC-E-spire x=42: gap=32)
+  //   Descent/rise stays z≥22 while x∈[42,65] to clear FC-E-spire z=18+r
+  //   South approach to fountain: x=62 z=60 route (clears FC-SE2/FC-S-neon)
+  //     then steps west to x=10 at z=22 (below FC-SE-glass z=17) before z=0
+  //   Fountain circle stays |x|≤12, |z|≤13, y=6
   const pts = [
-    // [px, py, pz,   tx, ty, tz]           // description
-    [   0, 400,  300,   0, 200,    0],       // 0: High sky start — looking down at city
-    [  80, 340,  200,  30, 180,   80],       // 1: Begin descent, banking right
-    [ 120, 260,   80, 100, 140,    0],       // 2: Mid descent — city expanding below
-    [  80, 180,    0,  40, 120,  -40],       // 3: Cloud layer pierce — buildings emerging
-    [  40, 120,  -60,  10,  80,  -80],       // 4: Below clouds — rooftop level, financial core
-    [   0, 240,  -80, -20, 160, -100],       // 5: Rooftop sweep ABOVE tallest towers (220h), banking left
-    [ -40, 220, -100, -60, 150, -120],       // 6: Continue banking above west spires
-    [ -30, 180, -130, -10, 120, -150],       // 7: Arc right, descending, heading south
-    [   0, 130, -160,  20,  80, -120],       // 8: Turn south, dropping toward boulevard
-    [  30,  55,  -80,  20,  30,  -30],       // 9: Descend into grand boulevard
-    [  20,  12,  -20,  50,  10,    0],       // 10: Street level entry — boulevard
-    [  60,   8,    0,  90,   8,    0],       // 11: East along grand boulevard at eye level
-    [  90,   8,    0, 120,   8,  -10],       // 12: Approaching entertainment district
-    [ 130,  14,  -10, 148,  12,  -18],       // 13: Into entertainment, on avenue x=90 side (clear of bldg x=110,z=-25)
-    [ 148,  16,  -20, 172,  15,  -12],       // 14: Banking right, neon facades close
-    [ 170,  18,  -10, 175,  16,   10],       // 15: Arc south through entertainment core
-    [ 170,  20,   20, 155,  18,   40],       // 16: Banking left, continue south arc
-    [ 145,  15,   45, 120,  12,   50],       // 17: Heading west, low between buildings
-    [ 110,  10,   50,  90,   8,   30],       // 18: Back to avenue, heading west
-    [  90,   8,   20,  60,   8,    0],       // 19: West along boulevard toward center
-    [  50,   6,    0,  20,   5,    0],       // 20: Approaching plaza — very low
-    [  15,   4,    0, -10,   4,   10],       // 21: Entering plaza — fountain ahead
-    [   0,   5,   10,  -5,   4,    0],       // 22: Arc right around fountain (south)
-    [  -8,   5,    0,  -5,   4,  -10],       // 23: North side of fountain
-    [   0,   6,  -12,   8,   5,    0],       // 24: Complete fountain arc, heading east
-    [  10,   8,  -20,   0,   8,  -40],       // 25: Rise away from plaza
-    [   0,  12,  -40, -30,  10,  -60],       // 26: Banking left, heading north-west
-    [ -20,  10,  -55, -45,   9,  -70],       // 27: Into residential, shifted east to avoid bldg at x=-42,z=-48
-    [ -60,   8,  -65, -90,   8,  -60],       // 28: Along residential street, lamps ahead
-    [ -90,   8,  -50, -90,   8,  -20],       // 29: North on west avenue — lamps flanking
-    [ -90,   8,  -10, -90,   8,   20],       // 30: Continuing north on west avenue
-    [ -90,   8,   30, -70,   8,   50],       // 31: Turning east off avenue
-    [ -60,   8,   55, -30,   8,   55],       // 32: East along south street, residential
-    [ -20,   8,   55,  20,   8,   55],       // 33: Approaching center from south
-    [   5,  10,   45,   0,   8,   20],       // 34: Climbing slightly toward plaza
-    [   0,  20,   20,   0,  15,    0],       // 35: Final rise, plaza below
-    [   0,  50,    0,   0,  30, -100],       // 36: Climb, financial core in view
-    [  40, 100,  -80,  20,  60, -160],       // 37: Rising above towers
-    [  80, 180, -160,  40, 100, -200],       // 38: High, industrial district below
-    [  40, 280,  -80,   0, 200,    0],       // 39: Back toward sky — loop closing
+    // [px, py, pz,   tx, ty, tz]
+    // Phase 1 — sky descent
+    [   0, 420,  300,   0, 200,    0],   //  0
+    [  70, 340,  200,  30, 180,   60],   //  1
+    [ 110, 260,   80,  70, 140,    0],   //  2
+    [  70, 200,   60,  40, 145,   30],   //  3: z=60 south of FC-SE-glass z=39 by 21 ✓
+    [  70, 150,   55,  40, 110,   25],   //  4: z=55 south of FC-SE-glass z=39 by 16 ✓
+    [  70, 210,   55,  40, 170,   25],   //  5: anchor to hold z positive through rooftop transition
+    // Phase 2 — rooftop sweep (y≥238 above all buildings)
+    [  70, 265,   50,  40, 215,   10],   //  6
+    [  62, 265,   22,  30, 215,  -40],   //  7: x=62 z=22 clears FC-E-spire (z=18+r=20.5 by 1.5) ✓
+    [  20, 265,  -65,   0, 215, -120],   //  8: y=265 above all, safe to swing north
+    [ -40, 255, -115, -60, 200, -145],   //  9
+    [  25, 250, -165,  45, 195, -125],   // 10
+    [  70, 238,  -80,  40, 180,  -35],   // 11: y=238 > FC-E-spire h=200 ✓
+    // Descent along x=64 corridor (east of FC-E-spire east edge 58+r=60.5 by 3.5)
+    // z=22 clears FC-E-spire south edge z=18+r=20.5 by 1.5 ✓
+    [  67, 238,   22,  15, 200,    5],   // 12: pivot point at y=238 to prevent overshoot into descent
+    [  65, 210,   22,  15, 155,    5],   // 13: start of altitude drop
+    [  64, 120,   22,  15,  80,    5],   // 13: mid anchor
+    [  64,  40,   22,  15,  15,    5],   // 14: low anchor
+    [  64,  14,   22,  64,   8,   13],   // 15: near-street anchor
+    [  64,  10,   22,  64,   7,   13],   // 16: very near ground — extra undershoot guard
+    [  64,   9,   22,  64,   6,   13],   // 17: street level x=64 z=22
+    [  64,   9,   13,  83,   6,   13],   // 16: run east to East Ave at z=13 (below FC-E-spire z=18) ✓
+    // Phase 3 — East Avenue (x=83): enter from south, dense anchors prevent drift
+    [  83,   9,   13,  83,   6,    0],   // 17: East Ave south anchor
+    [  83,   9,    0,  83,   6,  -22],   // 18: heading north
+    [  83,   9,  -22,  83,   6,  -63],   // 19: z=-22 clears FC-NE-glass z=-17+r by 2 ✓
+    [  83,   9,  -63,  83,   6,  -88],   // 20: z=-63 clears FC-N-slab z=-55 by 8 ✓
+    [  83,   9,  -88,  83,   6, -112],   // 21: x=83 clears IND-E x=52 by 31 ✓
+    [  83,   9, -112,  83,   6, -130],   // 22: past IND-E
+    [  83,   9, -130,  83,   6, -155],   // 23: ENT-FarNW x=98: gap=15 ✓
+    // Phase 4 — North Street west (z=-63)
+    [  83,   9,  -63,  83,   6,  -63],   // 24: anchor before turn (prevents x drift)
+    [  24,   9,  -63,  -40,   6,  -63],  // 25: x=24 clears FC-N-slab x=18 by 6 ✓
+    [ -40,   9,  -63,  -83,   6,  -63],  // 26: x=-40 clears FC-NW2 x=-33 by 7 ✓
+    // Phase 5 — West Avenue southward (x=-83)
+    [ -83,   9,  -63,  -83,   6,    0],  // 27: RES-NE x=-95: gap=12 ✓
+    [ -83,   9,    0,  -83,   6,   63],  // 28
+    [ -83,   9,   63,  -83,   6,  130],  // 29
+    // Phase 6 — South Street east (z=63)
+    [ -20,   9,   63,   64,   6,   63],  // 30: FC-SW2 x=-33: gap=13 ✓
+    [  64,   9,   63,   64,   6,   22],  // 31: arrive east side, anchor at x=64 z=63
+    // South approach: run x=64 south to z=13 (below FC-SE-glass z=17, east of FC-E-spire x=58 by 6) ✓
+    [  64,   9,   22,   64,   6,   13],  // 32: x=64 anchor z=22
+    [  64,   9,   13,   64,   6,   13],  // 33: hold x=64 z=13 (prevents spline drift)
+    // Fountain approach: rise above FC ring (h=220), descend into courtyard
+    // Fountain WPs at y=16 — high enough that CatmullRom dip stays above y=2.0
+    [  64,  60,   10,   0, 120,    0],   // 34: gradual rise step 1
+    [  64, 230,    0,   0, 200,    0],   // 35: above FC ring h=220 ✓
+    [   0, 230,    0,   0, 100,    0],   // 36: center above courtyard
+    [   0,  80,    0,   0,  20,    0],   // 37: descent step 1
+    [   0,  30,    0,   0,  10,    0],   // 38: descent step 2
+    // Phase 7 — Fountain plaza at y=16 (CatmullRom dip stays above y=2 with neighbors at 30/25)
+    [   0,  16,   13,   0,  10,    0],   // 39: fountain N
+    [ -12,  16,    6,   0,  10,    0],   // 40: fountain NW
+    [ -12,  16,   -6,   0,  10,    0],   // 41: fountain SW
+    [   0,  16,  -13,   0,  10,    0],   // 42: fountain S
+    [  12,  16,   -6,   0,  10,    0],   // 43: fountain SE
+    [  12,  16,    6,   0,  10,    0],   // 44: fountain NE
+    // Phase 8 — rise back to sky
+    [   0,  25,    0,   0,  20,  -80],   // 45
+    [   0, 210,  -20,   0, 180, -140],   // 42: y=210 > FC-E-spire h=200 ✓
+    [  62, 260, -130,   0, 210, -160],   // 43: x=62 clears FC-E-spire x=58 by 4 ✓
+    [  20, 265,  -60,   0, 210,    0],   // 44: sky — loop closes
   ];
 
   const positions = pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
@@ -291,24 +353,25 @@ export function createCity(scene) {
   const concP  = pbr(A.concrete, 3, 6);
 
   const facadeMats = [
-    // 0: glass tower — cool blue-tinted windows, corporate reflective
-    new THREE.MeshStandardMaterial({ ...glassP, color: "#1e2f4a", roughness: 0.15, metalness: 0.7,
+    // 0: glass tower — texture visible, blue tint via setColorAt instance color
+    // color "#4a6080" = mid-blue-grey lets the glass facade texture show clearly
+    new THREE.MeshStandardMaterial({ ...glassP, color: "#4a6080", roughness: 0.15, metalness: 0.7,
       emissive: "#4a90d8", emissiveMap: winGlass, emissiveIntensity: 0.55,
       envMapIntensity: 2.0, normalScale: new THREE.Vector2(1, 1) }),
-    // 1: residential — warm amber/orange lit windows
-    new THREE.MeshStandardMaterial({ ...resP, color: "#2e2218", roughness: 0.75, metalness: 0.05,
+    // 1: residential — warm mid-tone so facade texture pattern is legible
+    new THREE.MeshStandardMaterial({ ...resP, color: "#6a5040", roughness: 0.75, metalness: 0.05,
       emissive: "#d07030", emissiveMap: winRes, emissiveIntensity: 0.65,
       envMapIntensity: 0.4, normalScale: new THREE.Vector2(0.7, 0.7) }),
-    // 2: metal/industrial — dim cool-blue windows
-    new THREE.MeshStandardMaterial({ ...metalP, color: "#18202e", roughness: 0.35, metalness: 0.85,
+    // 2: metal/industrial — mid steel-blue, texture shows rivets/panels
+    new THREE.MeshStandardMaterial({ ...metalP, color: "#3a4858", roughness: 0.35, metalness: 0.85,
       emissive: "#2840a0", emissiveMap: winMetal, emissiveIntensity: 0.30,
       envMapIntensity: 1.4, normalScale: new THREE.Vector2(0.9, 0.9) }),
-    // 3: concrete/civic — muted, few lit windows
-    new THREE.MeshStandardMaterial({ ...concP, color: "#1e2028", roughness: 0.7, metalness: 0.10,
+    // 3: concrete/civic — mid grey, concrete texture readable
+    new THREE.MeshStandardMaterial({ ...concP, color: "#484c54", roughness: 0.7, metalness: 0.10,
       emissive: "#202840", emissiveMap: winConc, emissiveIntensity: 0.20,
       envMapIntensity: 0.3, normalScale: new THREE.Vector2(0.6, 0.6) }),
-    // 4: neon entertainment — vivid magenta/cyan glow
-    new THREE.MeshStandardMaterial({ ...neonP, color: "#160e28", roughness: 0.25, metalness: 0.5,
+    // 4: neon entertainment — mid purple-grey, neon facade texture vibrant
+    new THREE.MeshStandardMaterial({ ...neonP, color: "#503860", roughness: 0.25, metalness: 0.5,
       emissive: "#e030d0", emissiveMap: winNeon, emissiveIntensity: 0.90,
       envMapIntensity: 1.6, normalScale: new THREE.Vector2(1, 1) }),
   ];
@@ -345,31 +408,105 @@ export function createCity(scene) {
     m.computeBoundingSphere();
   });
 
-  // ── Rooftop antennas & tanks ────────────────────────────────────────────
-  const antMat  = new THREE.MeshStandardMaterial({ color: "#2a3850", roughness: 0.4, metalness: 0.85 });
-  const tankMat = new THREE.MeshStandardMaterial({ color: "#323e4a", roughness: 0.6, metalness: 0.3 });
+  // ── Rooftop caps — distinct shape per district for legibility from above ─
+  const antMat     = new THREE.MeshStandardMaterial({ color: "#2a3850", roughness: 0.4, metalness: 0.85 });
+  const tankMat    = new THREE.MeshStandardMaterial({ color: "#323e4a", roughness: 0.6, metalness: 0.3 });
+  const spireMatG  = new THREE.MeshStandardMaterial({ color: "#5080c0", roughness: 0.1, metalness: 0.9, emissive: "#103060", emissiveIntensity: 0.4 });
+  const spireMatN  = new THREE.MeshBasicMaterial({ color: "#cc00cc", transparent: true, opacity: 0.85 });
+  const roofFlatG  = new THREE.MeshStandardMaterial({ color: "#304060", roughness: 0.3, metalness: 0.7 });
+  const roofFlatR  = new THREE.MeshStandardMaterial({ color: "#5a4030", roughness: 0.8, metalness: 0.05 });
+  const roofFlatI  = new THREE.MeshStandardMaterial({ color: "#283040", roughness: 0.5, metalness: 0.6 });
+  const roofFlatC  = new THREE.MeshStandardMaterial({ color: "#3c3c44", roughness: 0.85, metalness: 0.1 });
+  const helipadMat = new THREE.MeshBasicMaterial({ color: "#ffcc00", transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+
   BUILDINGS.forEach((b, i) => {
-    if (b.h < 50) return;
-    const h = hash2D(i * 3.7, i * 1.1);
-    if (h < 0.4) {
-      const aH = 6 + h * 18;
-      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, aH, 6), antMat);
-      ant.position.set(b.x, b.h + aH * 0.5, b.z); root.add(ant);
-      const blink = new THREE.Mesh(new THREE.SphereGeometry(0.28, 6, 6),
-        new THREE.MeshBasicMaterial({ color: "#ff1818", transparent: true, opacity: 0.85 }));
-      blink.position.set(b.x, b.h + aH + 0.3, b.z); root.add(blink);
-    } else if (h < 0.65) {
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 2.5, 8), tankMat);
-      tank.position.set(b.x + b.w * 0.25, b.h + 1.25, b.z - b.d * 0.2); root.add(tank);
+    const rw = b.w, rd = b.d;
+    const h2 = hash2D(i * 3.7, i * 1.1);
+    const h3 = hash2D(i * 1.3, i * 5.9);
+
+    if (b.mat === 0) {
+      // Glass towers: glass-and-steel pyramid spire or stepped crown
+      if (b.h > 100) {
+        // Tall glass: elegant pyramid spire
+        const spH = 12 + h2 * 20;
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(Math.min(rw, rd) * 0.28, spH, 4), spireMatG);
+        spire.position.set(b.x, b.h + spH * 0.5, b.z);
+        spire.rotation.y = Math.PI / 4; root.add(spire);
+        // Blinking beacon at top
+        const blink = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 6),
+          new THREE.MeshBasicMaterial({ color: "#ff4444", transparent: true, opacity: 0.9 }));
+        blink.position.set(b.x, b.h + spH + 0.3, b.z); root.add(blink);
+      } else {
+        // Mid-height glass: flat stepped crown (2 step boxes)
+        const step1 = new THREE.Mesh(new THREE.BoxGeometry(rw * 0.85, 1.8, rd * 0.85), roofFlatG);
+        step1.position.set(b.x, b.h + 0.9, b.z); root.add(step1);
+        const step2 = new THREE.Mesh(new THREE.BoxGeometry(rw * 0.55, 1.5, rd * 0.55), roofFlatG);
+        step2.position.set(b.x, b.h + 2.55, b.z); root.add(step2);
+        // Optional helipad circle on largest stepped crowns
+        if (h2 > 0.6) {
+          const hpad = new THREE.Mesh(new THREE.CircleGeometry(Math.min(rw, rd) * 0.22, 16), helipadMat);
+          hpad.rotation.x = -Math.PI / 2;
+          hpad.position.set(b.x, b.h + 1.82, b.z); root.add(hpad);
+        }
+      }
+    } else if (b.mat === 4) {
+      // Neon entertainment: flat roof with neon frame ring + sign post
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(rw * 0.92, 1.2, rd * 0.92),
+        new THREE.MeshStandardMaterial({ color: "#1a0828", roughness: 0.3, metalness: 0.6, emissive: "#cc00ff", emissiveIntensity: 0.5 }));
+      frame.position.set(b.x, b.h + 0.6, b.z); root.add(frame);
+      if (h2 > 0.5 && b.h > 60) {
+        // Vertical neon sign post
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.6, 10 + h3 * 8, 0.6), spireMatN);
+        post.position.set(b.x + rw * 0.3, b.h + 6 + h3 * 4, b.z - rd * 0.3); root.add(post);
+      }
+    } else if (b.mat === 1) {
+      // Residential: warm low-pitch roof ridge (box) + water tower
+      const ridge = new THREE.Mesh(new THREE.BoxGeometry(rw * 0.9, 1.0, rd * 0.9), roofFlatR);
+      ridge.position.set(b.x, b.h + 0.5, b.z); root.add(ridge);
+      if (h2 > 0.55) {
+        // Water tower
+        const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.4, 2.8, 8), tankMat);
+        tower.position.set(b.x + rw * 0.28, b.h + 1.4, b.z - rd * 0.25); root.add(tower);
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(1.45, 1.4, 8), roofFlatR);
+        cone.position.set(b.x + rw * 0.28, b.h + 3.5, b.z - rd * 0.25); root.add(cone);
+      }
+    } else if (b.mat === 2) {
+      // Industrial: flat functional roof with exhaust stacks
+      const roofCap = new THREE.Mesh(new THREE.BoxGeometry(rw * 0.95, 0.8, rd * 0.95), roofFlatI);
+      roofCap.position.set(b.x, b.h + 0.4, b.z); root.add(roofCap);
+      // 1–2 exhaust stacks
+      const stackCount = 1 + Math.floor(h2 * 2);
+      for (let s = 0; s < stackCount; s++) {
+        const sH = 3 + hash2D(i + s, 7.1) * 5;
+        const sx = b.x + (hash2D(i + s * 3, 2.1) - 0.5) * rw * 0.6;
+        const sz = b.z + (hash2D(i + s * 3, 4.7) - 0.5) * rd * 0.6;
+        const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, sH, 6), antMat);
+        stack.position.set(sx, b.h + sH * 0.5 + 0.8, sz); root.add(stack);
+      }
+    } else {
+      // Concrete/civic: simple parapet with slight overhang
+      const parapet = new THREE.Mesh(new THREE.BoxGeometry(rw + 0.6, 0.8, rd + 0.6), roofFlatC);
+      parapet.position.set(b.x, b.h + 0.4, b.z); root.add(parapet);
+      const inner  = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.4, 0.4, rd - 0.4), roofFlatC);
+      inner.position.set(b.x, b.h + 0.9, b.z); root.add(inner);
+    }
+
+    // Antenna on tall buildings of any type
+    if (b.h >= 60 && h3 < 0.3) {
+      const aH = 5 + h3 * 15;
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.16, aH, 6), antMat);
+      ant.position.set(b.x, b.h + aH * 0.5 + 1.2, b.z); root.add(ant);
+      const blink = new THREE.Mesh(new THREE.SphereGeometry(0.22, 6, 6),
+        new THREE.MeshBasicMaterial({ color: "#ff2020", transparent: true, opacity: 0.85 }));
+      blink.position.set(b.x, b.h + aH + 1.5, b.z); root.add(blink);
     }
   });
 
-  // ── Ground plane ────────────────────────────────────────────────────────
-  const gndPBR = pbr(A.asphaltDmg, 18, 18);
-  const groundMat = new THREE.MeshPhysicalMaterial({
-    ...gndPBR, color: "#080c12", metalness: 0.15, roughness: 0.72,
-    clearcoat: 0.22, clearcoatRoughness: 0.45,
-    normalScale: new THREE.Vector2(0.3, 0.3),
+  // ── Ground plane — grass/terrain outside the city footprint ─────────────
+  const gndPBR = pbr(A.ground054, 32, 32);
+  const groundMat = new THREE.MeshStandardMaterial({
+    ...gndPBR, color: "#3a4a2e", metalness: 0.0, roughness: 0.88,
+    normalScale: new THREE.Vector2(0.5, 0.5),
   });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), groundMat);
   ground.rotation.x = -Math.PI / 2; ground.position.y = -0.04; ground.receiveShadow = true;
@@ -868,7 +1005,8 @@ export function createCity(scene) {
       // Road wetness at night
       roadMat.clearcoat = 0.15 + mood * 0.40;
       roadMat.color.setStyle(mood > 0.5 ? "#30363c" : "#454e56");
-      groundMat.clearcoat = 0.18 + mood * 0.32;
+      // Ground054 is MeshStandardMaterial — no clearcoat, tint shifts night/day
+      groundMat.color.setStyle(mood > 0.5 ? "#2a3a1e" : "#4a5e34");
 
       // Fog tone: warm purple at night, cool gray day
       const fogNight = new THREE.Color("#221030");

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { getCameraPath } from "./city.js";
 
-const DURATION = 300; // 5 minutes
+const DURATION = 300;
 
 export function createFlyThroughCamera(camera) {
   const path = getCameraPath();
