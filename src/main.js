@@ -7,265 +7,233 @@ import { createAtmosphereLayers, createCloudLayer, createRainSystem } from "./pa
 
 const canvas = document.querySelector("#app");
 const scene  = new THREE.Scene();
-scene.background = new THREE.Color("#060b18");
-scene.fog = new THREE.Fog("#060b18", 120, 1200);
+scene.background = new THREE.Color("#04080f");
+scene.fog = new THREE.FogExp2("#04080f", 0.0006); // Exponential fog — natural depth falloff
 
-const daySky   = new THREE.Color("#87ceeb");
-const nightSky = new THREE.Color("#060b18");
-const dayFog   = new THREE.Color("#8cb8d8");
-const nightFog = new THREE.Color("#060b18");
+// Sky color presets
+const daySky   = new THREE.Color("#6ab4dc");
+const nightSky = new THREE.Color("#04080f");
 const tempColor = new THREE.Color();
 
-// #20: Narrower FOV for more dramatic perspective
-const camera = new THREE.PerspectiveCamera(
-  55, window.innerWidth / window.innerHeight, 0.5, 2600
-);
+// FOV 55 — dramatic perspective compression
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.8, 2400);
 
 const renderer = new THREE.WebGLRenderer({
-  canvas, antialias: true, powerPreference: "high-performance"
+  canvas, antialias: true, powerPreference: "high-performance",
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Cap at 1.5 for perf
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.85;
+renderer.toneMappingExposure = 0.65;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 
-// ── Load BOTH EXR environment maps for day/night IBL ────────────────────
-const pmremGenerator = new THREE.PMREMGenerator(renderer);
-pmremGenerator.compileEquirectangularShader();
+// Smarter rendering: only update shadow maps when needed
+let shadowUpdateCounter = 0;
 
-let nightEnvMap = null;
-let dayEnvMap = null;
-let envMapsLoaded = 0;
-
+// ── EXR Environment maps ─────────────────────────────────────────────────────
+const pmrem = new THREE.PMREMGenerator(renderer);
+pmrem.compileEquirectangularShader();
+let nightEnv = null, dayEnv = null, envLoaded = 0;
 const exrLoader = new EXRLoader();
 
-exrLoader.load("assets/dikhololo_night_1k.exr", (texture) => {
-  texture.mapping = THREE.EquirectangularReflectionMapping;
-  nightEnvMap = pmremGenerator.fromEquirectangular(texture).texture;
-  texture.dispose();
-  envMapsLoaded++;
-  if (envMapsLoaded >= 2) pmremGenerator.dispose();
-  if (!scene.environment) scene.environment = nightEnvMap;
+exrLoader.load("assets/dikhololo_night_1k.exr", tex => {
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  nightEnv = pmrem.fromEquirectangular(tex).texture;
+  tex.dispose(); envLoaded++;
+  if (envLoaded >= 2) pmrem.dispose();
+  if (!scene.environment) scene.environment = nightEnv;
+});
+exrLoader.load("assets/kloppenheim_02_1k.exr", tex => {
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  dayEnv = pmrem.fromEquirectangular(tex).texture;
+  tex.dispose(); envLoaded++;
+  if (envLoaded >= 2) pmrem.dispose();
 });
 
-exrLoader.load("assets/kloppenheim_02_1k.exr", (texture) => {
-  texture.mapping = THREE.EquirectangularReflectionMapping;
-  dayEnvMap = pmremGenerator.fromEquirectangular(texture).texture;
-  texture.dispose();
-  envMapsLoaded++;
-  if (envMapsLoaded >= 2) pmremGenerator.dispose();
-});
-
-// ── Stars ────────────────────────────────────────────────────────────────
-const starCount = 3200;
-const starPos = new Float32Array(starCount * 3);
-for (let i = 0; i < starCount; i++) {
+// ── Stars ─────────────────────────────────────────────────────────────────────
+const starGeo = new THREE.BufferGeometry();
+const starPos = new Float32Array(4000 * 3);
+for (let i = 0; i < 4000; i++) {
   const theta = Math.random() * Math.PI * 2;
-  const phi = Math.acos(2 * Math.random() - 1);
-  const r = 1800 + Math.random() * 200;
-  starPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-  starPos[i * 3 + 1] = Math.abs(r * Math.cos(phi)) + 40;
+  const phi   = Math.acos(2 * Math.random() - 1);
+  const r     = 1600 + Math.random() * 300;
+  starPos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+  starPos[i * 3 + 1] = Math.abs(r * Math.cos(phi)) + 50;
   starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
 }
-const starGeo = new THREE.BufferGeometry();
 starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
 const starMat = new THREE.PointsMaterial({
-  color: "#ffffff", size: 1.8, sizeAttenuation: false,
-  transparent: true, opacity: 0.95, depthWrite: false,
-  blending: THREE.AdditiveBlending
+  color: "#e8f0ff", size: 1.6, sizeAttenuation: false,
+  transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending,
 });
-const stars = new THREE.Points(starGeo, starMat);
-scene.add(stars);
+scene.add(new THREE.Points(starGeo, starMat));
 
-// ── #6: Moon — lower position visible from street level between buildings ─
+// ── Moon — visible high up when camera starts descent ─────────────────────────
+// Positioned NW, at high altitude, visible during opening sky shot
 const moonMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(35, 32, 32),
-  new THREE.MeshStandardMaterial({
-    color: "#d8eaff", emissive: "#88b0d8", emissiveIntensity: 1.2,
-    roughness: 1.0, metalness: 0.0
-  })
+  new THREE.SphereGeometry(16, 32, 32),
+  new THREE.MeshBasicMaterial({ color: "#7898b8" })
 );
-moonMesh.position.set(-200, 180, -500);
+moonMesh.position.set(-300, 280, -600);
 scene.add(moonMesh);
 
 const moonGlow = new THREE.Mesh(
-  new THREE.SphereGeometry(55, 32, 32),
-  new THREE.MeshBasicMaterial({
-    color: "#2858a8", transparent: true, opacity: 0.18,
-    side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false
-  })
+  new THREE.SphereGeometry(28, 24, 24),
+  new THREE.MeshBasicMaterial({ color: "#304878", transparent: true, opacity: 0.07, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false })
 );
 moonGlow.position.copy(moonMesh.position);
 scene.add(moonGlow);
 
-// ── Sun ──────────────────────────────────────────────────────────────────
+// ── Sun ───────────────────────────────────────────────────────────────────────
 const sunMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(52, 32, 32),
-  new THREE.MeshBasicMaterial({ color: "#fff8d0", transparent: true, opacity: 0.0 })
+  new THREE.SphereGeometry(55, 24, 24),
+  new THREE.MeshBasicMaterial({ color: "#fff6c0", transparent: true, opacity: 0.0 })
 );
-sunMesh.position.set(820, 310, -1050);
+sunMesh.position.set(900, 340, -1100);
 scene.add(sunMesh);
 
 const sunHalo = new THREE.Mesh(
-  new THREE.SphereGeometry(94, 32, 32),
-  new THREE.MeshBasicMaterial({
-    color: "#ffe878", transparent: true, opacity: 0.0,
-    side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false
-  })
+  new THREE.SphereGeometry(100, 24, 24),
+  new THREE.MeshBasicMaterial({ color: "#ffe060", transparent: true, opacity: 0.0, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false })
 );
 sunHalo.position.copy(sunMesh.position);
 scene.add(sunHalo);
 
-// ── Lights ───────────────────────────────────────────────────────────────
-const ambientLight = new THREE.HemisphereLight("#b0d8ff", "#0a0818", 1.0);
-scene.add(ambientLight);
+// ── Lights ─────────────────────────────────────────────────────────────────────
+const ambient = new THREE.HemisphereLight("#a8ccf0", "#080610", 0.9);
+scene.add(ambient);
 
-const moonLight = new THREE.DirectionalLight("#a0c8ff", 2.5);
+const moonLight = new THREE.DirectionalLight("#8ab0e0", 2.2);
 moonLight.position.copy(moonMesh.position);
 moonLight.castShadow = true;
-moonLight.shadow.mapSize.width = 2048;
-moonLight.shadow.mapSize.height = 2048;
-moonLight.shadow.camera.near = 1;
-moonLight.shadow.camera.far = 1800;
-moonLight.shadow.camera.left = -600;
-moonLight.shadow.camera.right = 600;
-moonLight.shadow.camera.top = 600;
-moonLight.shadow.camera.bottom = -600;
+moonLight.shadow.mapSize.set(1024, 1024); // 1024 not 2048 — faster
+moonLight.shadow.camera.near = 1; moonLight.shadow.camera.far = 1600;
+moonLight.shadow.camera.left = -500; moonLight.shadow.camera.right = 500;
+moonLight.shadow.camera.top  = 500;  moonLight.shadow.camera.bottom = -500;
 scene.add(moonLight);
 
-const sunLight = new THREE.DirectionalLight("#fff4d0", 0.0);
+const sunLight = new THREE.DirectionalLight("#fff0c0", 0.0);
 sunLight.position.copy(sunMesh.position);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
-sunLight.shadow.camera.near = 1;
-sunLight.shadow.camera.far = 2000;
-sunLight.shadow.camera.left = -600;
-sunLight.shadow.camera.right = 600;
-sunLight.shadow.camera.top = 600;
-sunLight.shadow.camera.bottom = -600;
+sunLight.shadow.mapSize.set(1024, 1024);
+sunLight.shadow.camera.near = 1; sunLight.shadow.camera.far = 2000;
+sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
+sunLight.shadow.camera.top  = 500;  sunLight.shadow.camera.bottom = -500;
 scene.add(sunLight);
 
-// #14: Accent lights lowered to street level for camera at y=6
-const rimLight = new THREE.PointLight("#ff4fd8", 35, 1200, 2);
-rimLight.position.set(0, 40, 0);
-scene.add(rimLight);
+// Accent point lights — orbit at mid altitude, colour the cityscape
+const rimLight  = new THREE.PointLight("#e040d0", 0, 1000, 2); rimLight.position.set(0, 45, 0); scene.add(rimLight);
+const fillLight = new THREE.PointLight("#30b0ff", 0, 1200, 2); fillLight.position.set(0, 38, 200); scene.add(fillLight);
+const cyaLight  = new THREE.PointLight("#00e8ff", 0, 1400, 2); cyaLight.position.set(0, 52, 0); scene.add(cyaLight);
+const magLight  = new THREE.PointLight("#e040d0", 0, 1400, 2); magLight.position.set(-300, 48, -160); scene.add(magLight);
 
-const fillLight = new THREE.PointLight("#2fbfff", 25, 1400, 2);
-fillLight.position.set(0, 35, 240);
-scene.add(fillLight);
-
-const skyLight = new THREE.PointLight("#19f9ff", 50, 1800, 2);
-skyLight.position.set(0, 50, 0);
-scene.add(skyLight);
-
-const magentaLight = new THREE.PointLight("#ff4fd8", 45, 1600, 2);
-magentaLight.position.set(-300, 45, -180);
-scene.add(magentaLight);
-
-// ── Scene objects ────────────────────────────────────────────────────────
-const city = createCity(scene);
-const rain = createRainSystem();
-scene.add(rain.object);
+// ── Scene objects ─────────────────────────────────────────────────────────────
+const city       = createCity(scene);
+const rain       = createRainSystem(); scene.add(rain.object);
 const atmosphere = createAtmosphereLayers(scene);
-const clouds = createCloudLayer(scene);
+const clouds     = createCloudLayer(scene);
 const flyThrough = createFlyThroughCamera(camera);
-const post = createPostProcessing(renderer, scene, camera, {
-  width: window.innerWidth, height: window.innerHeight
-});
+const post       = createPostProcessing(renderer, scene, camera, { width: window.innerWidth, height: window.innerHeight });
 
 const clock = new THREE.Clock();
-let elapsedTime = 0;
+let elapsed = 0;
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   post.resize(window.innerWidth, window.innerHeight);
 });
 
-function animate() {
-  const delta = clock.getDelta();
-  elapsedTime += delta;
+// ── Smart rendering helpers ────────────────────────────────────────────────────
+let lastCamHeight = -1;
 
-  const cycle = 0.5 + 0.5 * Math.sin(elapsedTime * 0.021 - Math.PI / 2);
-  const daylight = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
+function animate() {
+  const delta = Math.min(clock.getDelta(), 0.05); // Cap delta — prevents spiral on tab-switch
+  elapsed += delta;
+
+  // Day/night cycle (period ~5 min so you see both in one loop)
+  const cycle = 0.5 + 0.5 * Math.sin(elapsed * 0.021 - Math.PI / 2);
+  const daylight    = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
   const nightFactor = 1.0 - daylight;
 
-  const cameraState = flyThrough.update(elapsedTime);
-  city.update(elapsedTime, nightFactor);
-  rain.update(delta, cameraState.position);
-  atmosphere.update(elapsedTime, camera.position, nightFactor);
-  clouds.update(elapsedTime, camera.position, daylight);
+  const camState = flyThrough.update(elapsed);
+  const camH = camera.position.y;
 
-  // Sky & fog
-  scene.background.copy(tempColor.copy(nightSky).lerp(daySky, daylight));
-  scene.fog.color.copy(tempColor.copy(nightFog).lerp(dayFog, daylight));
-  scene.fog.near = 120 + daylight * 200;
-  scene.fog.far = 1200 + daylight * 600;
+  // Smarter fog: exponential, density based on altitude
+  // High up → thin fog; street level → denser haze
+  const altFactor = THREE.MathUtils.clamp(camH / 300, 0, 1);
+  const fogDensity = THREE.MathUtils.lerp(0.0012, 0.0003, altFactor);
+  scene.fog.density = fogDensity * (1 + nightFactor * 0.4);
+  const fogNight = new THREE.Color("#04080f");
+  const fogDay   = new THREE.Color("#7ab4cc");
+  scene.fog.color.copy(fogNight).lerp(fogDay, daylight);
+  scene.background.copy(tempColor.copy(new THREE.Color("#04080f")).lerp(new THREE.Color("#5a9ec8"), daylight));
 
-  // Swap environment map
-  if (daylight > 0.5 && dayEnvMap) {
-    scene.environment = dayEnvMap;
-  } else if (nightEnvMap) {
-    scene.environment = nightEnvMap;
-  }
+  // Env map swap — only when daylight crosses threshold
+  if (daylight > 0.5 && dayEnv  && scene.environment !== dayEnv)  scene.environment = dayEnv;
+  if (daylight < 0.5 && nightEnv && scene.environment !== nightEnv) scene.environment = nightEnv;
+
+  // Environment intensity
+  if (scene.environment) scene.environmentIntensity = 0.35 + daylight * 0.65;
 
   // Celestial
-  starMat.opacity = 0.04 + nightFactor * 0.96;
-  moonMesh.material.emissiveIntensity = 0.12 + nightFactor * 1.2;
-  moonGlow.material.opacity = 0.02 + nightFactor * 0.2;
-  sunMesh.material.opacity = daylight * 0.98;
-  sunHalo.material.opacity = daylight * 0.42;
+  starMat.opacity = 0.04 + nightFactor * 0.92;
+  moonGlow.material.opacity = 0.02 + nightFactor * 0.07;
+  sunMesh.material.opacity  = daylight * 0.95;
+  sunHalo.material.opacity  = daylight * 0.40;
 
-  // Exposure
-  renderer.toneMappingExposure = 0.55 + daylight * 0.65 + nightFactor * 0.15;
+  // Exposure — adaptive: brighter when high up in sky, cinematic at street
+  // Street-level gets higher exposure so the scene is visible
+  const streetExpBoost = THREE.MathUtils.clamp(1 - camH / 30, 0, 1) * 0.25;
+  const altExp = THREE.MathUtils.lerp(1.0, 0.75, altFactor);
+  renderer.toneMappingExposure = altExp * (0.70 + daylight * 0.50 + nightFactor * 0.18) + streetExpBoost;
 
-  // #10: Bloom — lower threshold at night so neon elements glow properly
+  // Bloom — selective neon glow at night, subtle during day
+  // High threshold means only the hottest neon pixels bloom
   post.setBloom(
-    0.06 + nightFactor * 0.40,     // strength: stronger at night
-    0.25 + nightFactor * 0.25,     // radius: wider at night
-    0.65 - nightFactor * 0.30      // threshold: 0.65 day → 0.35 night
+    0.03 + nightFactor * 0.25,
+    0.14 + nightFactor * 0.18,
+    0.95 - nightFactor * 0.05   // 0.95 day → 0.90 night (extremely selective)
   );
+  post.updateTime(elapsed);
 
   // Lights
-  ambientLight.intensity = 0.35 + daylight * 1.2;
-  ambientLight.color.setHSL(0.56, 0.7 - daylight * 0.3, 0.72 - nightFactor * 0.18);
-  moonLight.intensity = 0.4 + nightFactor * 2.5;
-  sunLight.intensity = daylight * 4.0;
-  rimLight.intensity = 2 + nightFactor * 30;
-  fillLight.intensity = 2 + nightFactor * 22;
-  skyLight.intensity = 2 + nightFactor * 42;
-  magentaLight.intensity = 2 + nightFactor * 35;
+  // Street-level ambient boost: when low, neon spill from buildings lights the scene
+  const streetBoost = THREE.MathUtils.clamp(1 - camH / 25, 0, 1) * nightFactor * 0.35;
+  ambient.intensity = 0.12 + daylight * 0.9 + streetBoost;
+  ambient.color.setHSL(0.76, 0.55 - daylight * 0.25, 0.50 - nightFactor * 0.15);
+  moonLight.intensity = 0.08 + nightFactor * 0.55;
+  sunLight.intensity  = daylight * 4.2;
+  rimLight.intensity  = nightFactor * 14;
+  fillLight.intensity = nightFactor * 10;
+  cyaLight.intensity  = nightFactor * 18;
+  magLight.intensity  = nightFactor * 16;
 
-  // Rain
-  rain.object.material.opacity = 0.04 + nightFactor * 0.08;
+  // Smarter shadow updates: only update every 3 frames when static
+  shadowUpdateCounter++;
+  const needShadowUpdate = shadowUpdateCounter % 3 === 0;
+  renderer.shadowMap.autoUpdate = needShadowUpdate;
 
-  // #14: Orbit accent lights at lower altitude
-  rimLight.position.x = Math.sin(elapsedTime * 0.12) * 300;
-  rimLight.position.y = 40;
-  rimLight.position.z = Math.cos(elapsedTime * 0.12) * 300;
-  fillLight.position.x = Math.cos(elapsedTime * 0.08) * 220;
-  fillLight.position.y = 35;
-  fillLight.position.z = 220 + Math.sin(elapsedTime * 0.08) * 160;
-  skyLight.position.x = Math.sin(elapsedTime * 0.05) * 160;
-  skyLight.position.y = 50;
-  skyLight.position.z = Math.cos(elapsedTime * 0.05) * 160;
-  magentaLight.position.x = -300 + Math.cos(elapsedTime * 0.06) * 120;
-  magentaLight.position.y = 45;
-  magentaLight.position.z = -180 + Math.sin(elapsedTime * 0.06) * 120;
+  // Orbit accent lights — low altitude
+  const et = elapsed;
+  rimLight.position.set(Math.sin(et * 0.11) * 280, 42, Math.cos(et * 0.11) * 280);
+  fillLight.position.set(Math.cos(et * 0.07) * 200, 36, 200 + Math.sin(et * 0.07) * 150);
+  cyaLight.position.set(Math.sin(et * 0.05) * 150, 50, Math.cos(et * 0.05) * 150);
+  magLight.position.set(-280 + Math.cos(et * 0.06) * 110, 46, -150 + Math.sin(et * 0.06) * 110);
 
-  // Environment map intensity
-  if (scene.environment) {
-    scene.environmentIntensity = 0.4 + daylight * 0.6;
-  }
+  // Particles & city
+  city.update(elapsed, nightFactor);
+  rain.update(delta, camState.position);
+  atmosphere.update(elapsed, camera.position, nightFactor);
+  clouds.update(elapsed, camera.position, daylight);
 
-  // #19: Update cinematic shader time
-  post.updateTime(elapsedTime);
+  // Rain: heavier at night, also heavier when low altitude
+  const rainIntensity = (0.03 + nightFactor * 0.07) * (1 + (1 - altFactor) * 0.5);
+  rain.object.material.opacity = rainIntensity;
 
   post.composer.render();
   requestAnimationFrame(animate);
