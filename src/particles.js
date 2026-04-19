@@ -175,62 +175,117 @@ export function createCloudLayer(scene) {
 }
 
 // ── Fountain spray ──────────────────────────────────────────────────────────
-// Water spray particles rising from the fountain at (0, 0, 0)
+// Multi-jet water spray: central geyser + 8 arced ring jets + splash mist
 export function createFountainSpray(scene) {
-  const count = 400;
+  // Central jet: 150 particles, tall and narrow
+  // Ring jets: 8 jets × 30 particles each = 240, arcing outward
+  // Splash mist: 110 particles, low and wide around basin rim
+  const CENTRAL = 150, RING = 240, SPLASH = 110;
+  const count = CENTRAL + RING + SPLASH;
   const positions  = new Float32Array(count * 3);
-  const velocities = new Float32Array(count * 3); // vx, vy, vz per particle
+  const velocities = new Float32Array(count * 3);
   const lifetimes  = new Float32Array(count);
+  const sizes      = new Float32Array(count);
 
-  function resetParticle(i) {
-    // Spawn at fountain center with slight spread
-    positions[i * 3]     = (Math.random() - 0.5) * 3;
-    positions[i * 3 + 1] = 1.0 + Math.random() * 0.5;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 3;
-    // Upward velocity with outward spread
-    const angle = Math.random() * Math.PI * 2;
-    const spread = 1.5 + Math.random() * 3;
-    velocities[i * 3]     = Math.cos(angle) * spread;
-    velocities[i * 3 + 1] = 8 + Math.random() * 12; // strong upward
-    velocities[i * 3 + 2] = Math.sin(angle) * spread;
+  function resetCentral(i) {
+    // Gentle central column from spire tip — stays close to fountain
+    positions[i * 3]     = (Math.random() - 0.5) * 0.3;
+    positions[i * 3 + 1] = 6.5 + Math.random() * 0.2;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.3;
+    velocities[i * 3]     = (Math.random() - 0.5) * 0.6;
+    velocities[i * 3 + 1] = 3 + Math.random() * 3; // gentle upward, peaks ~2-3 units above spire
+    velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
+    lifetimes[i] = 0.4 + Math.random() * 0.6;
+    sizes[i] = 0.20 + Math.random() * 0.15;
+  }
+
+  function resetRing(i, elapsed) {
+    // 8 jets evenly spaced around upper tier rim (radius ~4.3)
+    const jetIndex = Math.floor((i - CENTRAL) / 30);
+    const jetAngle = (jetIndex / 8) * Math.PI * 2 + (elapsed || 0) * 0.15;
+    const r = 4.3;
+    positions[i * 3]     = Math.cos(jetAngle) * r + (Math.random() - 0.5) * 0.2;
+    positions[i * 3 + 1] = 1.9 + Math.random() * 0.15;
+    positions[i * 3 + 2] = Math.sin(jetAngle) * r + (Math.random() - 0.5) * 0.2;
+    // Low arc outward — peaks ~1.5 units above rim, lands in lower basin
+    const outSpeed = 2.0 + Math.random() * 1.5;
+    velocities[i * 3]     = Math.cos(jetAngle) * outSpeed;
+    velocities[i * 3 + 1] = 2.5 + Math.random() * 2.0;
+    velocities[i * 3 + 2] = Math.sin(jetAngle) * outSpeed;
+    lifetimes[i] = 0.4 + Math.random() * 0.5;
+    sizes[i] = 0.15 + Math.random() * 0.12;
+  }
+
+  function resetSplash(i) {
+    // Low mist around basin rim where ring jets land
+    const a = Math.random() * Math.PI * 2;
+    const r = 7 + Math.random() * 3.5;
+    positions[i * 3]     = Math.cos(a) * r;
+    positions[i * 3 + 1] = 0.8 + Math.random() * 0.2;
+    positions[i * 3 + 2] = Math.sin(a) * r;
+    velocities[i * 3]     = (Math.random() - 0.5) * 1.0;
+    velocities[i * 3 + 1] = 0.3 + Math.random() * 0.8;
+    velocities[i * 3 + 2] = (Math.random() - 0.5) * 1.0;
     lifetimes[i] = 0.8 + Math.random() * 1.2;
+    sizes[i] = 0.35 + Math.random() * 0.25;
   }
 
   for (let i = 0; i < count; i++) {
-    resetParticle(i);
-    lifetimes[i] = Math.random() * 2.0; // stagger initial lifetimes
+    if (i < CENTRAL) resetCentral(i);
+    else if (i < CENTRAL + RING) resetRing(i, 0);
+    else resetSplash(i);
+    lifetimes[i] = Math.random() * 1.5; // stagger
   }
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
 
   const mat = new THREE.PointsMaterial({
-    color: "#80e0ff", size: 0.35, transparent: true, opacity: 0.35,
+    color: "#90e8ff", size: 0.3, transparent: true, opacity: 0.40,
     depthWrite: false, blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
   });
 
   const pts = new THREE.Points(geo, mat);
   pts.frustumCulled = false;
   scene.add(pts);
 
+  let elapsedTotal = 0;
   return {
     object: pts,
     update(delta, nightFactor) {
+      elapsedTotal += delta;
       const pos = geo.attributes.position;
       for (let i = 0; i < count; i++) {
         lifetimes[i] -= delta;
-        if (lifetimes[i] <= 0) { resetParticle(i); continue; }
+        if (lifetimes[i] <= 0) {
+          if (i < CENTRAL) resetCentral(i);
+          else if (i < CENTRAL + RING) resetRing(i, elapsedTotal);
+          else resetSplash(i);
+          continue;
+        }
         pos.array[i * 3]     += velocities[i * 3] * delta;
         pos.array[i * 3 + 1] += velocities[i * 3 + 1] * delta;
         pos.array[i * 3 + 2] += velocities[i * 3 + 2] * delta;
-        // Gravity
-        velocities[i * 3 + 1] -= 14 * delta;
-        // Reset if fallen below basin
-        if (pos.array[i * 3 + 1] < 0.5) resetParticle(i);
+        // Gravity — stronger for central jet, lighter for splash mist
+        const grav = i < CENTRAL ? 16 : i < CENTRAL + RING ? 14 : 4;
+        velocities[i * 3 + 1] -= grav * delta;
+        // Air resistance on horizontal for splash mist
+        if (i >= CENTRAL + RING) {
+          velocities[i * 3]     *= 0.98;
+          velocities[i * 3 + 2] *= 0.98;
+        }
+        // Reset if fallen below water surface
+        if (pos.array[i * 3 + 1] < 0.5) {
+          if (i < CENTRAL) resetCentral(i);
+          else if (i < CENTRAL + RING) resetRing(i, elapsedTotal);
+          else resetSplash(i);
+        }
       }
       pos.needsUpdate = true;
-      // Brighter glow at night, still visible during day
-      mat.opacity = 0.20 + nightFactor * 0.25;
+      mat.opacity = 0.30 + nightFactor * 0.20;
+      mat.size = 0.3 + Math.sin(elapsedTotal * 0.5) * 0.05;
     },
   };
 }

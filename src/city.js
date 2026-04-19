@@ -624,35 +624,122 @@ export function createCity(scene) {
   const plaza = new THREE.Mesh(new THREE.CircleGeometry(22, 48), plazaMat);
   plaza.rotation.x = -Math.PI / 2; plaza.position.y = 0.025; ftnGrp.add(plaza);
 
-  const basinMat = new THREE.MeshStandardMaterial({ color: "#1a2234", roughness: 0.4, metalness: 0.3 });
-  const basin = new THREE.Mesh(new THREE.CylinderGeometry(10, 10.5, 0.8, 32), basinMat);
+  // Decorative ring around plaza edge
+  const ringMat = new THREE.MeshStandardMaterial({ color: "#0a1828", roughness: 0.3, metalness: 0.7, emissive: "#003050", emissiveIntensity: 0.15 });
+  const ringOuter = new THREE.Mesh(new THREE.TorusGeometry(22, 0.3, 8, 48), ringMat);
+  ringOuter.rotation.x = -Math.PI / 2; ringOuter.position.y = 0.15; ftnGrp.add(ringOuter);
+
+  // Lower basin — ornate with beveled edge
+  const basinMat = new THREE.MeshStandardMaterial({ color: "#0e1828", roughness: 0.25, metalness: 0.65, emissive: "#051525", emissiveIntensity: 0.1 });
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(10, 10.5, 0.8, 48), basinMat);
   basin.position.y = 0.4; ftnGrp.add(basin);
+  // Basin rim — bright metallic lip
+  const rimMat = new THREE.MeshStandardMaterial({ color: "#2a4060", roughness: 0.15, metalness: 0.85, emissive: "#0a2040", emissiveIntensity: 0.2 });
+  const basinRim = new THREE.Mesh(new THREE.TorusGeometry(10.2, 0.18, 8, 48), rimMat);
+  basinRim.rotation.x = -Math.PI / 2; basinRim.position.y = 0.82; ftnGrp.add(basinRim);
 
+  // Lower water — higher-poly for vertex ripple animation
+  const waterGeo = new THREE.CircleGeometry(9.6, 64, 0, Math.PI * 2);
   const waterMat = new THREE.MeshPhysicalMaterial({
-    color: "#000810", metalness: 0.9, roughness: 0.02,
-    clearcoat: 1.0, clearcoatRoughness: 0.02,
-    transparent: true, opacity: 0.82,
-    emissive: "#082040", emissiveIntensity: 0.2,
+    color: "#0a2038", metalness: 0.6, roughness: 0.08,
+    clearcoat: 1.0, clearcoatRoughness: 0.04,
+    transparent: true, opacity: 0.88,
+    emissive: "#104878", emissiveIntensity: 0.35,
   });
-  const water = new THREE.Mesh(new THREE.CircleGeometry(9.6, 40), waterMat);
+  const water = new THREE.Mesh(waterGeo, waterMat);
   water.rotation.x = -Math.PI / 2; water.position.y = 0.82; ftnGrp.add(water);
+  // Store base Y positions for ripple animation
+  const waterBaseY = new Float32Array(waterGeo.attributes.position.array.length);
+  waterBaseY.set(waterGeo.attributes.position.array);
 
-  // Middle tier
-  const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 5.0, 0.6, 24), basinMat);
-  tier2.position.y = 1.6; ftnGrp.add(tier2);
-  const water2 = new THREE.Mesh(new THREE.CircleGeometry(4.2, 24), waterMat);
-  water2.rotation.x = -Math.PI / 2; water2.position.y = 1.92; ftnGrp.add(water2);
+  // Middle tier — taller with decorative shape
+  const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5.0, 1.0, 32), basinMat);
+  tier2.position.y = 1.35; ftnGrp.add(tier2);
+  const tier2Rim = new THREE.Mesh(new THREE.TorusGeometry(4.4, 0.12, 8, 32), rimMat);
+  tier2Rim.rotation.x = -Math.PI / 2; tier2Rim.position.y = 1.87; ftnGrp.add(tier2Rim);
 
-  // Top spire
-  const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.5, 4, 12), basinMat);
-  spire.position.y = 4.0; ftnGrp.add(spire);
+  // Upper water — also animated
+  const water2Geo = new THREE.CircleGeometry(4.0, 48);
+  const water2 = new THREE.Mesh(water2Geo, waterMat.clone());
+  water2.rotation.x = -Math.PI / 2; water2.position.y = 1.88; ftnGrp.add(water2);
+  const water2BaseY = new Float32Array(water2Geo.attributes.position.array.length);
+  water2BaseY.set(water2Geo.attributes.position.array);
 
-  // Neon-lit fountain light — cyan glow
-  const ftnLight = new THREE.PointLight("#00d4ff", 18, 40, 2);
-  ftnLight.position.set(0, 3, 0); ftnGrp.add(ftnLight);
-  const ftnGlow = new THREE.Mesh(new THREE.SphereGeometry(0.8, 12, 12),
+  // Cascade overflow rings — water spilling over tier edges
+  const cascadeMat = new THREE.MeshBasicMaterial({
+    color: "#40c8ff", transparent: true, opacity: 0.12,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const cascade1 = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.8, 0.5, 32, 1, true), cascadeMat);
+  cascade1.position.y = 1.1; ftnGrp.add(cascade1);
+  const cascade2 = new THREE.Mesh(new THREE.CylinderGeometry(10.1, 10.4, 0.35, 48, 1, true), cascadeMat.clone());
+  cascade2.position.y = 0.62; ftnGrp.add(cascade2);
+
+  // Top spire — glowing crystal
+  const spireMat = new THREE.MeshPhysicalMaterial({
+    color: "#102848", metalness: 0.7, roughness: 0.05,
+    clearcoat: 1.0, clearcoatRoughness: 0.01,
+    emissive: "#0080c0", emissiveIntensity: 0.5,
+    transparent: true, opacity: 0.75,
+  });
+  const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.6, 5, 6), spireMat);
+  spire.position.y = 4.4; ftnGrp.add(spire);
+  // Spire glow halo
+  const spireHalo = new THREE.Mesh(new THREE.SphereGeometry(0.6, 12, 12),
+    new THREE.MeshBasicMaterial({ color: "#00d4ff", transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
+  spireHalo.position.y = 6.9; ftnGrp.add(spireHalo);
+
+  // Ring of 6 colored underwater lights — high intensity, wide range to illuminate water
+  const ftnLights = [];
+  const ftnLightColors = ["#00d4ff", "#4060ff", "#00ffa0", "#8040ff", "#00c8ff", "#20a0ff"];
+  for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2;
+    const lx = Math.cos(angle) * 7;
+    const lz = Math.sin(angle) * 7;
+    const col = ftnLightColors[i];
+    const pl = new THREE.PointLight(col, 25, 50, 1.5);
+    pl.position.set(lx, 1.5, lz); ftnGrp.add(pl);
+    const gm = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 8),
+      new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+    gm.position.copy(pl.position); ftnGrp.add(gm);
+    ftnLights.push({ light: pl, glow: gm, angle, baseColor: new THREE.Color(col) });
+  }
+  // Central top light — illuminates spire and upper basin
+  const ftnLight = new THREE.PointLight("#00d4ff", 28, 55, 1.5);
+  ftnLight.position.set(0, 5, 0); ftnGrp.add(ftnLight);
+  const ftnGlow = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12),
     new THREE.MeshBasicMaterial({ color: "#00d4ff", transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
   ftnGlow.position.copy(ftnLight.position); ftnGrp.add(ftnGlow);
+
+  // Overhead fill light — ensures fountain is visible even in daytime from above
+  const ftnFill = new THREE.PointLight("#c0e8ff", 15, 60, 1.5);
+  ftnFill.position.set(0, 12, 0); ftnGrp.add(ftnFill);
+  // Low warm uplights at basin edge — catch water ripples from below
+  const ftnUp1 = new THREE.PointLight("#40a0ff", 18, 35, 1.8);
+  ftnUp1.position.set(0, 0.3, 0); ftnGrp.add(ftnUp1);
+  const ftnUp2 = new THREE.PointLight("#2080c0", 12, 25, 1.8);
+  ftnUp2.position.set(5, 0.3, 5); ftnGrp.add(ftnUp2);
+  const ftnUp3 = new THREE.PointLight("#2080c0", 12, 25, 1.8);
+  ftnUp3.position.set(-5, 0.3, -5); ftnGrp.add(ftnUp3);
+
+  // Low mist ring — 120 tiny particles hugging the basin
+  const mistCount = 120;
+  const mistPos = new Float32Array(mistCount * 3);
+  for (let i = 0; i < mistCount; i++) {
+    const a = (i / mistCount) * Math.PI * 2;
+    const r = 8 + Math.random() * 5;
+    mistPos[i * 3]     = Math.cos(a) * r;
+    mistPos[i * 3 + 1] = 0.6 + Math.random() * 0.8;
+    mistPos[i * 3 + 2] = Math.sin(a) * r;
+  }
+  const mistGeo = new THREE.BufferGeometry();
+  mistGeo.setAttribute("position", new THREE.BufferAttribute(mistPos, 3));
+  const mistMat = new THREE.PointsMaterial({
+    color: "#80d0ff", size: 0.6, transparent: true, opacity: 0.08,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const mistPts = new THREE.Points(mistGeo, mistMat);
+  mistPts.frustumCulled = false; ftnGrp.add(mistPts);
 
   // ── Puddles ─────────────────────────────────────────────────────────────
   const pudMat = new THREE.MeshPhysicalMaterial({
@@ -1055,11 +1142,68 @@ export function createCity(scene) {
         f.material.opacity = 0.045 + mood * 0.045;
       });
 
-      // Fountain — visible day and night
-      ftnLight.intensity = 10 + mood * 18 + Math.sin(t * 1.3) * 4 * mood;
-      ftnGlow.material.opacity = 0.25 + mood * 0.50;
-      waterMat.emissiveIntensity = 0.12 + mood * 0.14 + Math.sin(t * 1.1) * 0.05;
+      // Fountain — animated water, lights, cascades
+      ftnLight.intensity = 20 + mood * 14 + Math.sin(t * 1.3) * 4 * mood;
+      ftnGlow.material.opacity = 0.35 + mood * 0.40;
+      ftnFill.intensity = 12 + mood * 6;
+      ftnUp1.intensity = 14 + mood * 8 + Math.sin(t * 1.8) * 3;
+      waterMat.emissiveIntensity = 0.25 + mood * 0.15 + Math.sin(t * 1.1) * 0.06;
       water2.material.emissiveIntensity = waterMat.emissiveIntensity;
+
+      // Water surface ripple animation — concentric waves from center
+      // Large visible amplitude: 0.25 units at edges, multiple overlapping wave fronts
+      const wPos = waterGeo.attributes.position;
+      for (let i = 0; i < wPos.count; i++) {
+        const bx = waterBaseY[i * 3], bz = waterBaseY[i * 3 + 2];
+        const dist = Math.sqrt(bx * bx + bz * bz);
+        const edgeFactor = dist / 9.6; // 0 at center, 1 at rim
+        // Three layered wave patterns: expanding rings, cross-waves, turbulence
+        const wave1 = Math.sin(dist * 0.8 - t * 3.5) * 0.18 * edgeFactor;
+        const wave2 = Math.sin(dist * 1.6 - t * 5.0 + 1.2) * 0.10;
+        const wave3 = Math.sin(bx * 0.5 + t * 2.0) * Math.cos(bz * 0.5 + t * 1.8) * 0.08;
+        wPos.array[i * 3 + 1] = waterBaseY[i * 3 + 1] + wave1 + wave2 + wave3;
+      }
+      wPos.needsUpdate = true;
+      waterGeo.computeVertexNormals();
+      // Upper tier ripples — vigorous splashing from central jet impacts
+      const w2Pos = water2Geo.attributes.position;
+      for (let i = 0; i < w2Pos.count; i++) {
+        const bx = water2BaseY[i * 3], bz = water2BaseY[i * 3 + 2];
+        const dist = Math.sqrt(bx * bx + bz * bz);
+        const w = Math.sin(dist * 1.5 - t * 5.0) * 0.12 + Math.sin(dist * 3.0 + t * 3.5) * 0.06;
+        w2Pos.array[i * 3 + 1] = water2BaseY[i * 3 + 1] + w;
+      }
+      w2Pos.needsUpdate = true;
+      water2Geo.computeVertexNormals();
+
+      // Cascade shimmer — pulsing water overflow
+      cascade1.material.opacity = 0.12 + 0.08 * Math.sin(t * 2.5) + mood * 0.08;
+      cascade1.rotation.y = t * 0.3;
+      cascade2.material.opacity = 0.10 + 0.06 * Math.sin(t * 2.0 + 1.0) + mood * 0.06;
+      cascade2.rotation.y = -t * 0.2;
+
+      // Spire glow pulse
+      spireMat.emissiveIntensity = 0.3 + 0.3 * Math.sin(t * 0.8) + mood * 0.2;
+      spireHalo.material.opacity = 0.2 + 0.2 * Math.sin(t * 1.2) + mood * 0.15;
+
+      // Ring lights — slow color cycling and strong intensity
+      ftnLights.forEach((fl, i) => {
+        const phase = t * 0.4 + fl.angle;
+        const hue = (phase * 0.08 + i / 6) % 1;
+        fl.light.color.setHSL(hue, 0.7, 0.55);
+        fl.glow.material.color.setHSL(hue, 0.8, 0.6);
+        fl.light.intensity = 18 + mood * 12 + Math.sin(t * 1.5 + fl.angle) * 5;
+        fl.glow.material.opacity = 0.45 + mood * 0.30 + Math.sin(t * 1.5 + fl.angle) * 0.1;
+      });
+
+      // Mist drift — slow rotation and gentle vertical bob
+      mistPts.rotation.y = t * 0.08;
+      const mPos = mistGeo.attributes.position;
+      for (let i = 0; i < mistCount; i++) {
+        mPos.array[i * 3 + 1] = 0.6 + Math.sin(t * 0.6 + i * 0.8) * 0.35;
+      }
+      mPos.needsUpdate = true;
+      mistMat.opacity = 0.05 + mood * 0.08 + Math.sin(t * 0.3) * 0.02;
 
       // Beacons — always-on aviation lights
       beacons.forEach(b => {
