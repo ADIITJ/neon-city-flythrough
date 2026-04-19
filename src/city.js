@@ -906,8 +906,47 @@ export function createCity(scene) {
   const carGroup = new THREE.Group(); root.add(carGroup);
   const carData = [];
 
-  function isBlocked(px, pz) {
-    return bounds.some(b => Math.abs(px - b.x) < b.hw && Math.abs(pz - b.z) < b.hd);
+  // Precompute blocked travel intervals per lane so cars never enter buildings/fountain
+  const FOUNTAIN_R = 26;
+  const CAR_LIMIT = 420;
+  function computeBlockedIntervals(road, laneOff, onZ) {
+    const cross = road + laneOff;
+    const intervals = [];
+    for (const b of bounds) {
+      if (onZ) {
+        if (Math.abs(cross - b.z) < b.hd) intervals.push([b.x - b.hw, b.x + b.hw]);
+      } else {
+        if (Math.abs(cross - b.x) < b.hw) intervals.push([b.z - b.hd, b.z + b.hd]);
+      }
+    }
+    // Fountain circle at origin
+    if (onZ && Math.abs(cross) < FOUNTAIN_R) {
+      const dx = Math.sqrt(FOUNTAIN_R * FOUNTAIN_R - cross * cross);
+      intervals.push([-dx, dx]);
+    } else if (!onZ && Math.abs(cross) < FOUNTAIN_R) {
+      const dz = Math.sqrt(FOUNTAIN_R * FOUNTAIN_R - cross * cross);
+      intervals.push([-dz, dz]);
+    }
+    // Merge overlapping
+    intervals.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const iv of intervals) {
+      if (merged.length && iv[0] <= merged[merged.length - 1][1] + 1) {
+        merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], iv[1]);
+      } else {
+        merged.push([iv[0], iv[1]]);
+      }
+    }
+    return merged;
+  }
+
+  function findSafeStart(travel, blocked, dir) {
+    for (const [lo, hi] of blocked) {
+      if (travel >= lo && travel <= hi) {
+        return dir > 0 ? hi + 1 : lo - 1;
+      }
+    }
+    return travel;
   }
 
   // Intentional car placements: specify road, lane, position, speed
@@ -944,6 +983,7 @@ export function createCity(scene) {
     carGroup.clear(); carData.length = 0;
     carDefs.forEach((def, i) => {
       const col = carPalette[i % carPalette.length];
+      const blocked = computeBlockedIntervals(def.road, def.laneOff, def.onZ);
       let mesh;
       if (template) {
         mesh = template.clone();
@@ -960,23 +1000,23 @@ export function createCity(scene) {
         const tl  = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.2, 0.08), tlMat); tl.position.set(-0.72, 0.52, 2.17);
         const tr  = tl.clone(); tr.position.x =  0.72;
         const hgl = new THREE.Mesh(new THREE.SphereGeometry(0.55, 6, 6), new THREE.MeshBasicMaterial({ color: "#fffae0", transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false })); hgl.position.set(0, 0.52, -2.6);
-        // Small headlight point light
         const hlt = new THREE.PointLight("#fffae0", 4, 12, 2); hlt.position.set(0, 0.52, -2.6);
         mesh.add(body, roof, hl, hr, tl, tr, hgl, hlt);
       }
 
       let px, pz;
       if (def.onZ) {
-        px = def.startX; pz = def.road + def.laneOff;
+        px = findSafeStart(def.startX, blocked, def.dir);
+        pz = def.road + def.laneOff;
         mesh.rotation.y = def.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       } else {
-        px = def.road + def.laneOff; pz = def.startZ;
+        px = def.road + def.laneOff;
+        pz = findSafeStart(def.startZ, blocked, def.dir);
         mesh.rotation.y = def.dir > 0 ? 0 : Math.PI;
       }
-      if (isBlocked(px, pz)) return;
       mesh.position.set(px, 0.04, pz);
       carGroup.add(mesh);
-      carData.push({ mesh, def });
+      carData.push({ mesh, def, blocked });
     });
   }
   loader.load(A.car, gltf => spawnCars(gltf.scene), undefined, () => spawnCars(null));
@@ -1049,36 +1089,28 @@ export function createCity(scene) {
         ld.pool.material.opacity  = 0.08 + mood * (0.50 + g * 0.22);
       });
 
-      // Cars — avoid fountain plaza and buildings
-      const LIMIT = 420;
-      const FOUNTAIN_R2 = 26 * 26; // fountain plaza radius² (22 + margin)
+      // Cars — precomputed blocked intervals, zero building/fountain overlap
       carData.forEach(cd => {
-        const { def, mesh } = cd;
+        const { def, mesh, blocked } = cd;
         const step = def.speed * 0.016 * def.dir;
-        let px, pz;
+        let travel = def.onZ ? mesh.position.x + step : mesh.position.z + step;
+        if (travel > CAR_LIMIT) travel = -CAR_LIMIT;
+        if (travel < -CAR_LIMIT) travel = CAR_LIMIT;
+        // Teleport past any blocked interval
+        for (const [lo, hi] of blocked) {
+          if (travel >= lo && travel <= hi) {
+            travel = def.dir > 0 ? hi + 0.5 : lo - 0.5;
+            if (travel > CAR_LIMIT) travel = -CAR_LIMIT;
+            if (travel < -CAR_LIMIT) travel = CAR_LIMIT;
+            break;
+          }
+        }
         if (def.onZ) {
-          px = mesh.position.x + step;
-          pz = def.road + def.laneOff;
-          if (px > LIMIT) px = -LIMIT; if (px < -LIMIT) px = LIMIT;
+          mesh.position.x = travel;
+          mesh.position.z = def.road + def.laneOff;
         } else {
-          px = def.road + def.laneOff;
-          pz = mesh.position.z + step;
-          if (pz > LIMIT) pz = -LIMIT; if (pz < -LIMIT) pz = LIMIT;
-        }
-        // Skip fountain plaza
-        if (px * px + pz * pz < FOUNTAIN_R2) {
-          // Teleport past fountain in travel direction
-          if (def.onZ) px += def.dir * 30;
-          else pz += def.dir * 30;
-        }
-        // Skip if inside a building
-        if (!isBlocked(px, pz)) {
-          mesh.position.x = px;
-          mesh.position.z = pz;
-        } else {
-          // Teleport past the obstacle
-          if (def.onZ) mesh.position.x += def.dir * 8;
-          else mesh.position.z += def.dir * 8;
+          mesh.position.x = def.road + def.laneOff;
+          mesh.position.z = travel;
         }
       });
     },
