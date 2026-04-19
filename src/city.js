@@ -989,18 +989,17 @@ export function createCity(scene) {
     buildingBounds: bounds,
 
     update(t, mood = 1) {
-      // Building emissive — per-district intensities, scale with night mood
-      // At night (mood=1): glass=0.55, res=0.65, metal=0.30, concrete=0.20, neon=0.90
+      // Building emissive — per-district intensities, base glow even in day
       const emissiveBases = [0.55, 0.65, 0.30, 0.20, 0.90];
       facadeMats.forEach((m, i) => {
-        m.emissiveIntensity = emissiveBases[i] * (0.08 + mood * 0.92);
+        m.emissiveIntensity = emissiveBases[i] * (0.18 + mood * 0.82);
       });
 
-      // Neon geometry
-      panMat.opacity  = 0.02 + mood * 0.52 + Math.sin(t * 1.7) * 0.03 * mood;
-      stripMat.opacity = 0.02 + mood * 0.48;
-      neonEdgeMat.opacity = 0.02 + mood * 0.18;
-      spillMat.opacity = 0.02 + mood * 0.08;
+      // Neon geometry — base glow during day
+      panMat.opacity  = 0.10 + mood * 0.44 + Math.sin(t * 1.7) * 0.03 * mood;
+      stripMat.opacity = 0.08 + mood * 0.42;
+      neonEdgeMat.opacity = 0.06 + mood * 0.14;
+      spillMat.opacity = 0.04 + mood * 0.07;
 
       // Road wetness at night
       roadMat.clearcoat = 0.15 + mood * 0.40;
@@ -1013,58 +1012,73 @@ export function createCity(scene) {
       const fogDay   = new THREE.Color("#585e64");
       fogVols.forEach(f => {
         f.material.color.copy(fogNight).lerp(fogDay, 1 - mood);
-        f.material.opacity = 0.035 + mood * 0.055;
+        f.material.opacity = 0.045 + mood * 0.045;
       });
 
-      // Fountain
-      ftnLight.intensity = 6 + mood * 22 + Math.sin(t * 1.3) * 4 * mood;
-      ftnGlow.material.opacity = 0.05 + mood * 0.65;
-      waterMat.emissiveIntensity = 0.06 + mood * 0.18 + Math.sin(t * 1.1) * 0.05;
+      // Fountain — visible day and night
+      ftnLight.intensity = 10 + mood * 18 + Math.sin(t * 1.3) * 4 * mood;
+      ftnGlow.material.opacity = 0.25 + mood * 0.50;
+      waterMat.emissiveIntensity = 0.12 + mood * 0.14 + Math.sin(t * 1.1) * 0.05;
       water2.material.emissiveIntensity = waterMat.emissiveIntensity;
 
-      // Beacons
+      // Beacons — always-on aviation lights
       beacons.forEach(b => {
         const p = 0.5 + 0.5 * Math.sin(t * 0.85 + b.phase);
-        b.light.intensity = 2 + mood * (22 + 16 * p);
-        b.gm.material.opacity = 0.03 + mood * (0.55 + p * 0.2);
+        b.light.intensity = 6 + mood * (20 + 14 * p);
+        b.gm.material.opacity = 0.20 + mood * (0.45 + p * 0.15);
       });
 
-      // Shop signs flicker
+      // Shop signs — visible in day, bright at night
       shopSigns.forEach((s, i) => {
-        s.mesh.material.opacity = 0.06 + mood * 0.78 + Math.sin(t * 2.0 + s.phase) * 0.05 * mood;
+        s.mesh.material.opacity = 0.15 + mood * 0.68 + Math.sin(t * 2.0 + s.phase) * 0.05 * mood;
       });
-      shopLights.forEach(sl => { sl.intensity = 0.4 + mood * 6.5; });
+      shopLights.forEach(sl => { sl.intensity = 1.2 + mood * 5.8; });
 
-      // Billboards pulse
+      // Billboards — glow day and night
       billboards.forEach(b => {
-        b.mesh.material.opacity = 0.02 + mood * 0.38 + Math.sin(t * b.pulse + b.phase) * 0.05 * mood;
+        b.mesh.material.opacity = 0.12 + mood * 0.30 + Math.sin(t * b.pulse + b.phase) * 0.05 * mood;
       });
 
-      // Street PointLights — on at night, off in day
-      streetLights.forEach(sl => { sl.intensity = mood * 28; });
+      // Street PointLights — visible day (subtle warm) and night (bright)
+      streetLights.forEach(sl => { sl.intensity = 4 + mood * 24; });
 
-      // Lamp glow — invisible day, glowing night
+      // Lamp glow — subtle during day, bright at night
       lampData.forEach(ld => {
         const g = 0.75 + 0.25 * Math.sin(t * 1.6 + ld.phase);
-        ld.glow.material.opacity  = 0.0 + mood * (0.70 + g * 0.22);
-        ld.pool.material.opacity  = 0.0 + mood * (0.55 + g * 0.25);
+        ld.glow.material.opacity  = 0.15 + mood * (0.60 + g * 0.20);
+        ld.pool.material.opacity  = 0.08 + mood * (0.50 + g * 0.22);
       });
 
-      // Cars
+      // Cars — avoid fountain plaza and buildings
       const LIMIT = 420;
+      const FOUNTAIN_R2 = 26 * 26; // fountain plaza radius² (22 + margin)
       carData.forEach(cd => {
         const { def, mesh } = cd;
         const step = def.speed * 0.016 * def.dir;
+        let px, pz;
         if (def.onZ) {
-          let nx = mesh.position.x + step;
-          if (nx > LIMIT) nx = -LIMIT; if (nx < -LIMIT) nx = LIMIT;
-          mesh.position.x = nx;
-          mesh.position.z = def.road + def.laneOff;
+          px = mesh.position.x + step;
+          pz = def.road + def.laneOff;
+          if (px > LIMIT) px = -LIMIT; if (px < -LIMIT) px = LIMIT;
         } else {
-          let nz = mesh.position.z + step;
-          if (nz > LIMIT) nz = -LIMIT; if (nz < -LIMIT) nz = LIMIT;
-          mesh.position.z = nz;
-          mesh.position.x = def.road + def.laneOff;
+          px = def.road + def.laneOff;
+          pz = mesh.position.z + step;
+          if (pz > LIMIT) pz = -LIMIT; if (pz < -LIMIT) pz = LIMIT;
+        }
+        // Skip fountain plaza
+        if (px * px + pz * pz < FOUNTAIN_R2) {
+          // Teleport past fountain in travel direction
+          if (def.onZ) px += def.dir * 30;
+          else pz += def.dir * 30;
+        }
+        // Skip if inside a building
+        if (!isBlocked(px, pz)) {
+          mesh.position.x = px;
+          mesh.position.z = pz;
+        } else {
+          // Teleport past the obstacle
+          if (def.onZ) mesh.position.x += def.dir * 8;
+          else mesh.position.z += def.dir * 8;
         }
       });
     },

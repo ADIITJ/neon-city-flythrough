@@ -102,7 +102,7 @@ export function createAtmosphereLayers(scene) {
     update(elapsed, camPos, mood) {
       dust.rotation.y = elapsed * 0.018;
       dust.position.set(camPos.x, 15, camPos.z);
-      mat.opacity = 0.004 + mood * 0.014;
+      mat.opacity = 0.010 + mood * 0.012;
     },
   };
 }
@@ -163,13 +163,74 @@ export function createCloudLayer(scene) {
         const proximity = 1 - THREE.MathUtils.clamp(camDist / 180, 0, 1);
         const dayBoost = 0.3 + daylight * 0.7;
 
-        cl.mesh.material.opacity = cl.baseOpacity * dayBoost * proximity * 1.4;
+        cl.mesh.material.opacity = cl.baseOpacity * dayBoost * proximity * 1.8;
 
         // Tint: blueish at night, white/cream in day
         const nightHue = new THREE.Color("#8090a8");
         const dayHue   = new THREE.Color("#d8e8f8");
         cl.mesh.material.color.copy(nightHue).lerp(dayHue, daylight);
       });
+    },
+  };
+}
+
+// ── Fountain spray ──────────────────────────────────────────────────────────
+// Water spray particles rising from the fountain at (0, 0, 0)
+export function createFountainSpray(scene) {
+  const count = 400;
+  const positions  = new Float32Array(count * 3);
+  const velocities = new Float32Array(count * 3); // vx, vy, vz per particle
+  const lifetimes  = new Float32Array(count);
+
+  function resetParticle(i) {
+    // Spawn at fountain center with slight spread
+    positions[i * 3]     = (Math.random() - 0.5) * 3;
+    positions[i * 3 + 1] = 1.0 + Math.random() * 0.5;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 3;
+    // Upward velocity with outward spread
+    const angle = Math.random() * Math.PI * 2;
+    const spread = 1.5 + Math.random() * 3;
+    velocities[i * 3]     = Math.cos(angle) * spread;
+    velocities[i * 3 + 1] = 8 + Math.random() * 12; // strong upward
+    velocities[i * 3 + 2] = Math.sin(angle) * spread;
+    lifetimes[i] = 0.8 + Math.random() * 1.2;
+  }
+
+  for (let i = 0; i < count; i++) {
+    resetParticle(i);
+    lifetimes[i] = Math.random() * 2.0; // stagger initial lifetimes
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+  const mat = new THREE.PointsMaterial({
+    color: "#80e0ff", size: 0.35, transparent: true, opacity: 0.35,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+
+  return {
+    object: pts,
+    update(delta, nightFactor) {
+      const pos = geo.attributes.position;
+      for (let i = 0; i < count; i++) {
+        lifetimes[i] -= delta;
+        if (lifetimes[i] <= 0) { resetParticle(i); continue; }
+        pos.array[i * 3]     += velocities[i * 3] * delta;
+        pos.array[i * 3 + 1] += velocities[i * 3 + 1] * delta;
+        pos.array[i * 3 + 2] += velocities[i * 3 + 2] * delta;
+        // Gravity
+        velocities[i * 3 + 1] -= 14 * delta;
+        // Reset if fallen below basin
+        if (pos.array[i * 3 + 1] < 0.5) resetParticle(i);
+      }
+      pos.needsUpdate = true;
+      // Brighter glow at night, still visible during day
+      mat.opacity = 0.20 + nightFactor * 0.25;
     },
   };
 }

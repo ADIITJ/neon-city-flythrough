@@ -3,7 +3,7 @@ import { EXRLoader } from "three/examples/jsm/loaders/EXRLoader.js";
 import { createCity } from "./city.js";
 import { createFlyThroughCamera } from "./camera.js";
 import { createPostProcessing } from "./effects.js";
-import { createAtmosphereLayers, createCloudLayer, createRainSystem } from "./particles.js";
+import { createAtmosphereLayers, createCloudLayer, createRainSystem, createFountainSpray } from "./particles.js";
 
 const canvas = document.querySelector("#app");
 const scene  = new THREE.Scene();
@@ -25,7 +25,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Cap at 1.5 fo
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.65;
+renderer.toneMappingExposure = 0.85;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 
@@ -132,6 +132,7 @@ const magLight  = new THREE.PointLight("#e040d0", 0, 1400, 2); magLight.position
 // ── Scene objects ─────────────────────────────────────────────────────────────
 const city       = createCity(scene);
 const rain       = createRainSystem(); scene.add(rain.object);
+const fountain   = createFountainSpray(scene);
 const atmosphere = createAtmosphereLayers(scene);
 const clouds     = createCloudLayer(scene);
 const flyThrough = createFlyThroughCamera(camera);
@@ -156,7 +157,8 @@ function animate() {
   elapsed += delta;
 
   // Day/night cycle (period ~5 min so you see both in one loop)
-  const cycle = 0.5 + 0.5 * Math.sin(elapsed * 0.021 - Math.PI / 2);
+  // Phase shifted so animation ends in daytime: at t=300, sin(300*0.021 + PI/2) = sin(6.3 + 1.57) ≈ sin(7.87) ≈ 1.0 → day
+  const cycle = 0.5 + 0.5 * Math.sin(elapsed * 0.021 + Math.PI / 2);
   const daylight    = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
   const nightFactor = 1.0 - daylight;
 
@@ -187,31 +189,31 @@ function animate() {
   sunHalo.material.opacity  = daylight * 0.40;
 
   // Exposure — adaptive: brighter when high up in sky, cinematic at street
-  // Street-level gets higher exposure so the scene is visible
-  const streetExpBoost = THREE.MathUtils.clamp(1 - camH / 30, 0, 1) * 0.25;
-  const altExp = THREE.MathUtils.lerp(1.0, 0.75, altFactor);
-  renderer.toneMappingExposure = altExp * (0.70 + daylight * 0.50 + nightFactor * 0.18) + streetExpBoost;
+  // Raised base for overall brighter scene
+  const streetExpBoost = THREE.MathUtils.clamp(1 - camH / 30, 0, 1) * 0.3;
+  const altExp = THREE.MathUtils.lerp(1.0, 0.80, altFactor);
+  renderer.toneMappingExposure = altExp * (0.85 + daylight * 0.45 + nightFactor * 0.20) + streetExpBoost;
 
-  // Bloom — selective neon glow at night, subtle during day
-  // High threshold means only the hottest neon pixels bloom
+  // Bloom — visible glow during day too, stronger at night
   post.setBloom(
-    0.03 + nightFactor * 0.25,
-    0.14 + nightFactor * 0.18,
-    0.95 - nightFactor * 0.05   // 0.95 day → 0.90 night (extremely selective)
+    0.10 + nightFactor * 0.22,
+    0.18 + nightFactor * 0.16,
+    0.88 - nightFactor * 0.05   // 0.88 day → 0.83 night
   );
   post.updateTime(elapsed);
 
   // Lights
-  // Street-level ambient boost: when low, neon spill from buildings lights the scene
-  const streetBoost = THREE.MathUtils.clamp(1 - camH / 25, 0, 1) * nightFactor * 0.35;
-  ambient.intensity = 0.12 + daylight * 0.9 + streetBoost;
-  ambient.color.setHSL(0.76, 0.55 - daylight * 0.25, 0.50 - nightFactor * 0.15);
-  moonLight.intensity = 0.08 + nightFactor * 0.55;
-  sunLight.intensity  = daylight * 4.2;
-  rimLight.intensity  = nightFactor * 14;
-  fillLight.intensity = nightFactor * 10;
-  cyaLight.intensity  = nightFactor * 18;
-  magLight.intensity  = nightFactor * 16;
+  // Street-level ambient boost: at street level, extra fill from neon spill
+  const streetBoost = THREE.MathUtils.clamp(1 - camH / 25, 0, 1) * 0.4;
+  ambient.intensity = 0.25 + daylight * 1.1 + streetBoost * nightFactor;
+  ambient.color.setHSL(0.76, 0.55 - daylight * 0.25, 0.55 - nightFactor * 0.10);
+  moonLight.intensity = 0.12 + nightFactor * 0.6;
+  sunLight.intensity  = daylight * 5.0;
+  // Accent lights: visible during day (subtle) and strong at night
+  rimLight.intensity  = 2.0 + nightFactor * 14;
+  fillLight.intensity = 1.5 + nightFactor * 10;
+  cyaLight.intensity  = 2.5 + nightFactor * 18;
+  magLight.intensity  = 2.0 + nightFactor * 16;
 
   // Smarter shadow updates: only update every 3 frames when static
   shadowUpdateCounter++;
@@ -228,11 +230,12 @@ function animate() {
   // Particles & city
   city.update(elapsed, nightFactor);
   rain.update(delta, camState.position);
+  fountain.update(delta, nightFactor);
   atmosphere.update(elapsed, camera.position, nightFactor);
   clouds.update(elapsed, camera.position, daylight);
 
-  // Rain: heavier at night, also heavier when low altitude
-  const rainIntensity = (0.03 + nightFactor * 0.07) * (1 + (1 - altFactor) * 0.5);
+  // Rain: visible in both day and night, heavier when low altitude
+  const rainIntensity = (0.06 + nightFactor * 0.06) * (1 + (1 - altFactor) * 0.5);
   rain.object.material.opacity = rainIntensity;
 
   post.composer.render();
