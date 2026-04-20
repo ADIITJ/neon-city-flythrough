@@ -87,20 +87,28 @@ const moonGlow = new THREE.Mesh(
 moonGlow.position.copy(moonMesh.position);
 scene.add(moonGlow);
 
-// ── Sun ───────────────────────────────────────────────────────────────────────
+// ── Sun — orbits in an arc, sets toward camera look direction ─────────────────
+const SUN_ORBIT_R = 1200; // radius of sun orbit
+const SUN_PEAK_Y  = 500;  // max altitude at noon
+
 const sunMesh = new THREE.Mesh(
   new THREE.SphereGeometry(55, 24, 24),
   new THREE.MeshBasicMaterial({ color: "#fff6c0", transparent: true, opacity: 0.0 })
 );
-sunMesh.position.set(900, 340, -1100);
 scene.add(sunMesh);
 
 const sunHalo = new THREE.Mesh(
   new THREE.SphereGeometry(100, 24, 24),
   new THREE.MeshBasicMaterial({ color: "#ffe060", transparent: true, opacity: 0.0, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false })
 );
-sunHalo.position.copy(sunMesh.position);
 scene.add(sunHalo);
+
+// Sunset glow — large warm disc visible when sun is near horizon
+const sunsetGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(200, 16, 16),
+  new THREE.MeshBasicMaterial({ color: "#ff4020", transparent: true, opacity: 0.0, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false })
+);
+scene.add(sunsetGlow);
 
 // ── Lights ─────────────────────────────────────────────────────────────────────
 const ambient = new THREE.HemisphereLight("#a8ccf0", "#080610", 0.9);
@@ -116,7 +124,7 @@ moonLight.shadow.camera.top  = 500;  moonLight.shadow.camera.bottom = -500;
 scene.add(moonLight);
 
 const sunLight = new THREE.DirectionalLight("#fff0c0", 0.0);
-sunLight.position.copy(sunMesh.position);
+sunLight.position.set(0, SUN_PEAK_Y, 0);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(1024, 1024);
 sunLight.shadow.camera.near = 1; sunLight.shadow.camera.far = 2000;
@@ -155,33 +163,37 @@ const _fogNight = new THREE.Color("#04080f");
 const _fogDay   = new THREE.Color("#7ab4cc");
 const _bgNight  = new THREE.Color("#04080f");
 const _bgDay    = new THREE.Color("#5a9ec8");
+const _sunsetSky = new THREE.Color("#e06830");
+const _sunsetFog = new THREE.Color("#c04820");
+// Scratch vectors for sun orbit (avoid per-frame allocation)
+const _lookDir  = new THREE.Vector3();
+const _perpDir  = new THREE.Vector3();
+const _sunDir   = new THREE.Vector3();
+const _negPerp  = new THREE.Vector3();
 
 // Day/night cycle bar DOM refs
-const cycleFill  = document.getElementById("cycleFill");
-const cycleIcon  = document.getElementById("cycleIcon");
-const cycleLabel = document.getElementById("cycleLabel");
+const cycleMarker = document.getElementById("cycleMarker");
+
+// Cycle period — 180s for full day→night→day
+const CYCLE_PERIOD = 180;
 
 function animate() {
   const delta = Math.min(clock.getDelta(), 0.05); // Cap delta — prevents spiral on tab-switch
   elapsed += delta;
 
-  // Day/night cycle (period ~5 min so you see both in one loop)
-  // Phase shifted so animation ends in daytime: at t=300, sin(300*0.021 + PI/2) = sin(6.3 + 1.57) ≈ sin(7.87) ≈ 1.0 → day
-  const cycle = 0.5 + 0.5 * Math.sin(elapsed * 0.021 + Math.PI / 2);
+  // Day/night cycle — full cycle in CYCLE_PERIOD seconds
+  // Phase PI/2 so it starts day, goes night at midpoint, returns to day
+  const cycle = 0.5 + 0.5 * Math.sin(elapsed * (2 * Math.PI / CYCLE_PERIOD) + Math.PI / 2);
   const daylight    = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
   const nightFactor = 1.0 - daylight;
 
-  // Update cycle bar
-  cycleFill.style.width = `${daylight * 100}%`;
-  if (daylight > 0.5) {
-    cycleFill.style.background = "linear-gradient(90deg, #ffcc40, #ff8830)";
-    cycleIcon.textContent = "\u2600";
-    cycleLabel.textContent = "Day";
-  } else {
-    cycleFill.style.background = "linear-gradient(90deg, #4060c0, #8040d0)";
-    cycleIcon.textContent = "\u263E";
-    cycleLabel.textContent = "Night";
-  }
+  // Cycle bar — linear with time, 0%=day start, 50%=midnight, 100%=day again
+  const cycleProgress = (elapsed % CYCLE_PERIOD) / CYCLE_PERIOD;
+  cycleMarker.style.left = `${cycleProgress * 100}%`;
+  // Marker color: warm when day, cool when night
+  cycleMarker.style.background = daylight > 0.5 ? "#ffe080" : "#8090c0";
+  cycleMarker.style.boxShadow = daylight > 0.5
+    ? "0 0 6px rgba(255,220,100,0.6)" : "0 0 6px rgba(100,140,220,0.6)";
 
   const camState = flyThrough.update(elapsed, daylight);
   const camH = camera.position.y;
@@ -193,6 +205,7 @@ function animate() {
   scene.fog.density = fogDensity * (1 + nightFactor * 0.4);
   scene.fog.color.copy(_fogNight).lerp(_fogDay, daylight);
   scene.background.copy(tempColor.copy(_bgNight).lerp(_bgDay, daylight));
+  // Sunset tint is applied after sun orbit computes sunsetTint (deferred below)
 
   // Env map swap — only when daylight crosses threshold
   if (daylight > 0.5 && dayEnv  && scene.environment !== dayEnv)  scene.environment = dayEnv;
@@ -201,12 +214,61 @@ function animate() {
   // Environment intensity
   if (scene.environment) scene.environmentIntensity = 0.35 + daylight * 0.65;
 
+  // ── Sun orbit — arcs across sky, sets toward camera look direction ───
+  // sunAngle: 0=horizon(rise), PI/2=zenith, PI=horizon(set), beyond=below
+  // cycle goes 1→0→1 via sin; map to sun elevation angle
+  // At cycle=1 (day peak): sun at zenith. At cycle=0.5: sun at horizon.
+  // At cycle<0.5: sun below horizon (night).
+  const sunSine = THREE.MathUtils.clamp(cycle * 2 - 1, -1, 1);
+  const sunElevation = Math.asin(sunSine);
+  const sunY = sunSine * SUN_PEAK_Y;
+  // Sun orbits in the horizontal plane toward camera's look target
+  _lookDir.copy(camState.lookTarget).sub(camState.position).setY(0).normalize();
+  const sunHoriz = Math.cos(sunElevation) * SUN_ORBIT_R;
+  // horizBlend: 1 at horizon (sunset/sunrise), 0 at zenith
+  const horizBlend = 1 - Math.abs(sunElevation) / (Math.PI / 2);
+  _perpDir.set(-_lookDir.z, 0, _lookDir.x).normalize();
+  // Rising: sun from the left. Setting: sun swings toward camera forward.
+  const rising = cycle > 0.5;
+  if (rising) {
+    _sunDir.copy(_perpDir).lerp(_lookDir, horizBlend * 0.6);
+  } else {
+    _negPerp.copy(_perpDir).negate();
+    _sunDir.copy(_lookDir).lerp(_negPerp, 1 - horizBlend * 0.7);
+  }
+  _sunDir.normalize();
+
+  sunMesh.position.set(
+    camState.position.x + _sunDir.x * sunHoriz,
+    Math.max(sunY, -200),
+    camState.position.z + _sunDir.z * sunHoriz
+  );
+  sunHalo.position.copy(sunMesh.position);
+  sunsetGlow.position.copy(sunMesh.position);
+  sunLight.position.copy(sunMesh.position);
+
+  // Sun visibility
+  const sunVisible = sunY > -50;
+  sunMesh.visible = sunVisible;
+  sunHalo.visible = sunVisible;
+  sunMesh.material.opacity = THREE.MathUtils.clamp(daylight * 1.2, 0, 0.95);
+  sunHalo.material.opacity = THREE.MathUtils.clamp(daylight * 0.5, 0, 0.4);
+
+  // Sunset glow — strongest when sun is near horizon (horizBlend close to 1)
+  const sunsetIntensity = horizBlend * daylight * (1 - daylight) * 4; // peaks at transition
+  sunsetGlow.material.opacity = THREE.MathUtils.clamp(sunsetIntensity * 0.25, 0, 0.18);
+  // Tint sky warmer during sunset
+  const sunsetTint = THREE.MathUtils.clamp(sunsetIntensity, 0, 1);
+  // Blend sunset warmth into sky and fog
+  if (sunsetTint > 0.01) {
+    scene.background.lerp(_sunsetSky, sunsetTint * 0.35);
+    scene.fog.color.lerp(_sunsetFog, sunsetTint * 0.25);
+  }
+
   // Celestial — hide stars entirely during bright day
   starPoints.visible = nightFactor > 0.05;
   starMat.opacity = 0.04 + nightFactor * 0.92;
   moonGlow.material.opacity = 0.02 + nightFactor * 0.07;
-  sunMesh.material.opacity  = daylight * 0.95;
-  sunHalo.material.opacity  = daylight * 0.40;
 
   // Exposure — adaptive: brighter when high up in sky, cinematic at street
   // Raised base for overall brighter scene

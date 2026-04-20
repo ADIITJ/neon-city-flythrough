@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { getCameraPath } from "./city.js";
 
-const DURATION = 60;
+const DURATION = 180;
 
 export function createFlyThroughCamera(camera) {
   const path = getCameraPath();
@@ -59,7 +59,7 @@ export function createFlyThroughCamera(camera) {
       camera.position.copy(_pos);
       camera.lookAt(_tgt);
 
-      return { position: camera.position.clone(), lookTarget: _tgt.clone() };
+      return { position: _pos, lookTarget: _tgt };
     },
   };
 }
