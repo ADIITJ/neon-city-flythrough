@@ -18,9 +18,6 @@ const A = {
   metal:      { col: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Color.jpg",        nrm: "assets/Metal032_1K-JPG/Metal032_1K-JPG_NormalGL.jpg",        rgh: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Roughness.jpg",        mtl: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Metalness.jpg" },
   car: "assets/Car.glb",
   lamp: "assets/sci-fi_street_lamp.glb",
-  mapleTree: "assets/maple_tree.glb",
-  bush: "assets/real_bush.glb",
-  pineBushes: "assets/3_pine_bushes.glb",
 };
 
 // Hoisted Color constants — avoid per-frame allocation
@@ -1000,16 +997,24 @@ export function createCity(scene) {
   const treeSpots = [];
   const bushSpots = [];
 
+  // Universal road collision check — reused by all placement loops
+  function onAnyRoad(x, z) {
+    for (const sz of STREETS_Z) { if (Math.abs(z - sz) < streetWidth(sz) / 2 + 1) return true; }
+    for (const ax of AVENUES_X) { if (Math.abs(x - ax) < avenueWidth(ax) / 2 + 1) return true; }
+    return false;
+  }
+
   // Street sidewalk trees (east-west streets)
   for (const z of STREETS_Z) {
     const rw = streetWidth(z);
     for (const s of [-1, 1]) {
       const swCenter = z + s * (rw / 2 + 2.5 + 0.2); // center of sidewalk
       for (let x = -350; x <= 350; x += 25) {
-        // Skip if inside a building or on fountain plaza
         const blocked = bounds.some(b => Math.abs(x - b.x) < b.hw + 2 && Math.abs(swCenter - b.z) < b.hd + 2);
         if (blocked) continue;
         if (x * x + swCenter * swCenter < 24 * 24) continue; // fountain
+        // Skip if on a crossing avenue
+        if (AVENUES_X.some(ax => Math.abs(x - ax) < avenueWidth(ax) / 2 + 2)) continue;
         treeSpots.push({ x, z: swCenter, ry: hash2D(x * 0.1, swCenter * 0.1) * Math.PI * 2 });
       }
     }
@@ -1023,7 +1028,8 @@ export function createCity(scene) {
         const blocked = bounds.some(b => Math.abs(swCenter - b.x) < b.hw + 2 && Math.abs(z - b.z) < b.hd + 2);
         if (blocked) continue;
         if (swCenter * swCenter + z * z < 24 * 24) continue;
-        // Skip if we already have a tree nearby (from street placement)
+        // Skip if on a crossing street
+        if (STREETS_Z.some(sz => Math.abs(z - sz) < streetWidth(sz) / 2 + 2)) continue;
         const dup = treeSpots.some(t => Math.abs(t.x - swCenter) < 8 && Math.abs(t.z - z) < 8);
         if (dup) continue;
         treeSpots.push({ x: swCenter, z, ry: hash2D(swCenter * 0.1, z * 0.1) * Math.PI * 2 });
@@ -1034,12 +1040,16 @@ export function createCity(scene) {
   // Fountain plaza trees — small ring of 8 trees around outer plaza edge
   for (let i = 0; i < 8; i++) {
     const angle = (i / 8) * Math.PI * 2 + 0.2;
-    treeSpots.push({ x: Math.cos(angle) * 18, z: Math.sin(angle) * 18, ry: angle, fountain: true });
+    const fx = Math.cos(angle) * 18, fz = Math.sin(angle) * 18;
+    if (onAnyRoad(fx, fz)) continue;
+    treeSpots.push({ x: fx, z: fz, ry: angle, fountain: true });
   }
   // Fountain plaza bushes — inner ring
   for (let i = 0; i < 12; i++) {
     const angle = (i / 12) * Math.PI * 2;
-    bushSpots.push({ x: Math.cos(angle) * 14, z: Math.sin(angle) * 14, ry: angle });
+    const bx = Math.cos(angle) * 14, bz = Math.sin(angle) * 14;
+    if (onAnyRoad(bx, bz)) continue;
+    bushSpots.push({ x: bx, z: bz, ry: angle });
   }
 
   // Civic/Park district (south) — extra trees in open spaces
@@ -1047,10 +1057,7 @@ export function createCity(scene) {
     for (let z = 100; z <= 280; z += 22) {
       const blocked = bounds.some(b => Math.abs(x - b.x) < b.hw + 3 && Math.abs(z - b.z) < b.hd + 3);
       if (blocked) continue;
-      // Only in gaps between buildings
-      const onRoad = STREETS_Z.some(sz => Math.abs(z - sz) < streetWidth(sz) / 2 + 5) ||
-                     AVENUES_X.some(ax => Math.abs(x - ax) < avenueWidth(ax) / 2 + 5);
-      if (onRoad) continue;
+      if (onAnyRoad(x, z)) continue;
       if (hash2D(x * 0.3, z * 0.3) > 0.5) treeSpots.push({ x, z, ry: hash2D(x, z) * Math.PI * 2 });
       else bushSpots.push({ x, z, ry: hash2D(x + 1, z + 1) * Math.PI * 2 });
     }
@@ -1061,9 +1068,7 @@ export function createCity(scene) {
     for (let z = -120; z <= 120; z += 28) {
       const blocked = bounds.some(b => Math.abs(x - b.x) < b.hw + 3 && Math.abs(z - b.z) < b.hd + 3);
       if (blocked) continue;
-      const onRoad = STREETS_Z.some(sz => Math.abs(z - sz) < streetWidth(sz) / 2 + 5) ||
-                     AVENUES_X.some(ax => Math.abs(x - ax) < avenueWidth(ax) / 2 + 5);
-      if (onRoad) continue;
+      if (onAnyRoad(x, z)) continue;
       if (hash2D(x * 0.7, z * 0.2) > 0.4) treeSpots.push({ x, z, ry: hash2D(x, z) * Math.PI * 2 });
     }
   }
@@ -1077,6 +1082,8 @@ export function createCity(scene) {
         const blocked = bounds.some(b => Math.abs(x - b.x) < b.hw + 1.5 && Math.abs(swCenter - b.z) < b.hd + 1.5);
         if (blocked) continue;
         if (x * x + swCenter * swCenter < 24 * 24) continue;
+        // Skip if on a crossing avenue
+        if (AVENUES_X.some(ax => Math.abs(x - ax) < avenueWidth(ax) / 2 + 2)) continue;
         const nearTree = treeSpots.some(t => Math.abs(t.x - x) < 6 && Math.abs(t.z - swCenter) < 6);
         if (nearTree) continue;
         if (hash2D(x * 0.5, swCenter * 0.5) > 0.6) bushSpots.push({ x, z: swCenter, ry: hash2D(x, swCenter) * Math.PI * 2 });
@@ -1084,97 +1091,50 @@ export function createCity(scene) {
     }
   }
 
-  // Place fallback procedural trees/bushes immediately, then swap with GLB models
-  function makeFallbackTree() {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 3, 6),
-      new THREE.MeshStandardMaterial({ color: "#3a2818", roughness: 0.9 }));
-    trunk.position.y = 1.5;
-    const canopy = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6),
-      new THREE.MeshStandardMaterial({ color: "#1a5020", roughness: 0.8 }));
-    canopy.position.y = 3.8;
-    g.add(trunk, canopy);
-    return g;
-  }
-  function makeFallbackBush() {
-    return new THREE.Mesh(new THREE.SphereGeometry(0.8, 6, 4),
-      new THREE.MeshStandardMaterial({ color: "#1a4018", roughness: 0.85 }));
-  }
+  // InstancedMesh fallback vegetation — 2 draw calls for all trees, 1 for bushes
+  const trunkGeo  = new THREE.CylinderGeometry(0.15, 0.2, 3, 6);
+  const trunkMat  = new THREE.MeshStandardMaterial({ color: "#3a2818", roughness: 0.9 });
+  const canopyGeo = new THREE.SphereGeometry(1.8, 8, 6);
+  const canopyMat = new THREE.MeshStandardMaterial({ color: "#1a5020", roughness: 0.8 });
+  const bushGeo   = new THREE.SphereGeometry(0.8, 6, 4);
+  const bushMat   = new THREE.MeshStandardMaterial({ color: "#1a4018", roughness: 0.85 });
 
-  // Place trees
-  const treeMeshes = [];
-  treeSpots.forEach(sp => {
-    const tree = makeFallbackTree();
+  const treeCount = treeSpots.length;
+  const bushCount = bushSpots.length;
+
+  const trunkInst  = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
+  const canopyInst = new THREE.InstancedMesh(canopyGeo, canopyMat, treeCount);
+  const bushInst   = new THREE.InstancedMesh(bushGeo, bushMat, bushCount);
+  trunkInst.castShadow = true; canopyInst.castShadow = true; bushInst.castShadow = true;
+
+  const _m4 = new THREE.Matrix4();
+  const _q  = new THREE.Quaternion();
+  const _s  = new THREE.Vector3();
+
+  treeSpots.forEach((sp, i) => {
     const scale = sp.fountain ? 0.6 + hash2D(sp.x, sp.z) * 0.3 : 0.8 + hash2D(sp.x, sp.z) * 0.5;
-    tree.scale.setScalar(scale);
-    tree.position.set(sp.x, 0, sp.z);
-    tree.rotation.y = sp.ry;
-    vegGroup.add(tree);
-    treeMeshes.push({ group: tree, spot: sp, scale });
+    _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.ry);
+    // Trunk
+    _s.setScalar(scale);
+    _m4.compose(new THREE.Vector3(sp.x, 1.5 * scale, sp.z), _q, _s);
+    trunkInst.setMatrixAt(i, _m4);
+    // Canopy
+    _m4.compose(new THREE.Vector3(sp.x, 3.8 * scale, sp.z), _q, _s);
+    canopyInst.setMatrixAt(i, _m4);
   });
-  // Place bushes
-  const bushMeshes = [];
-  bushSpots.forEach(sp => {
-    const bush = makeFallbackBush();
+  trunkInst.instanceMatrix.needsUpdate = true;
+  canopyInst.instanceMatrix.needsUpdate = true;
+
+  bushSpots.forEach((sp, i) => {
     const scale = 0.5 + hash2D(sp.x + 7, sp.z + 3) * 0.4;
-    bush.scale.setScalar(scale);
-    bush.position.set(sp.x, 0.4, sp.z);
-    bush.rotation.y = sp.ry;
-    vegGroup.add(bush);
-    bushMeshes.push({ mesh: bush, spot: sp, scale });
+    _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.ry);
+    _s.setScalar(scale);
+    _m4.compose(new THREE.Vector3(sp.x, 0.4 + 0.8 * scale, sp.z), _q, _s);
+    bushInst.setMatrixAt(i, _m4);
   });
+  bushInst.instanceMatrix.needsUpdate = true;
 
-  // Async load GLB models and replace fallbacks
-  // Share geometry+material across clones to avoid per-instance allocation
-  function replaceWithGLB(template, items, scaleMultiplier, yOff) {
-    // Collect shared geometry/material refs from the template
-    const sharedGeoMats = [];
-    template.traverse(ch => {
-      if (ch.isMesh) sharedGeoMats.push({ geo: ch.geometry, mat: ch.material });
-    });
-
-    items.forEach(item => {
-      const clone = template.clone();
-      // Reassign shared geometry+material instead of deep clones
-      let idx = 0;
-      clone.traverse(ch => {
-        if (ch.isMesh && idx < sharedGeoMats.length) {
-          ch.geometry = sharedGeoMats[idx].geo;
-          ch.material = sharedGeoMats[idx].mat;
-          idx++;
-        }
-      });
-      clone.scale.setScalar(item.scale * scaleMultiplier);
-      clone.position.set(item.spot.x, yOff, item.spot.z);
-      clone.rotation.y = item.spot.ry;
-      vegGroup.add(clone);
-      if (item.group) vegGroup.remove(item.group);
-      if (item.mesh) vegGroup.remove(item.mesh);
-    });
-  }
-
-  const logLoadErr = (name) => (err) => { console.error(`Failed to load ${name}:`, err); };
-
-  // Load maple tree for most trees
-  loader.load(A.mapleTree, gltf => {
-    const tmpl = gltf.scene;
-    tmpl.traverse(ch => { if (ch.isMesh) { ch.castShadow = true; ch.receiveShadow = true; } });
-    replaceWithGLB(tmpl, treeMeshes, 0.012, 0);
-  }, undefined, logLoadErr("maple_tree.glb"));
-
-  // Load bush model
-  loader.load(A.bush, gltf => {
-    const tmpl = gltf.scene;
-    tmpl.traverse(ch => { if (ch.isMesh) { ch.castShadow = true; } });
-    replaceWithGLB(tmpl, bushMeshes.slice(0, Math.floor(bushMeshes.length / 2)), 0.008, 0);
-  }, undefined, logLoadErr("real_bush.glb"));
-
-  // Load pine bushes for remaining bush spots
-  loader.load(A.pineBushes, gltf => {
-    const tmpl = gltf.scene;
-    tmpl.traverse(ch => { if (ch.isMesh) { ch.castShadow = true; } });
-    replaceWithGLB(tmpl, bushMeshes.slice(Math.floor(bushMeshes.length / 2)), 0.015, 0);
-  }, undefined, logLoadErr("3_pine_bushes.glb"));
+  vegGroup.add(trunkInst, canopyInst, bushInst);
 
   // ── CARS ───────────────────────────────────────────────────────────────
   // 120 cars, weighted heavily on main boulevard + grand avenue
