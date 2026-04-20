@@ -1,518 +1,405 @@
-# Neon City — Viva Notes
+# Neon City — Viva Preparation Notes
 ### Atharva Date & Samay Mehar | Computer Graphics Course Project
 
 ---
 
-## 1. Why Three.js + WebGL Instead of Blender + Unity?
+## Why We Chose to Code Everything From Scratch
 
-**The assignment originally asked for Blender + Unity. We chose Three.js + WebGL deliberately because it demonstrates deeper understanding of CG fundamentals.**
+The assignment originally expected Blender and Unity. We deliberately chose Three.js (a JavaScript library that talks directly to WebGL, the browser's GPU interface) because it forced us to implement every computer graphics concept by hand in code. In Blender, you place a light in the scene and adjust a slider; in our project, we create the light object, define its color and intensity, compute its position on the fly based on time-of-day math, manage its shadow map resolution, and decide which frames to update that shadow map on. In Unity, you click "Add Component > Bloom"; in our project, we instantiate the bloom pass, set the brightness extraction threshold, the blur radius, and the glow strength — and then we animate all three of those parameters every single frame as the scene transitions between day and night. Every concept the course covers — transformations, lighting models, texturing, shading, shadows, curves, particles — we had to write ourselves. There is no drag-and-drop, no visual editor. The scene graph, the materials, the animation loop, the post-processing pipeline: all of it is authored in ~2400 lines of JavaScript and GLSL.
 
-| Aspect | Blender/Unity | Our Approach (Three.js + WebGL) |
-|--------|--------------|-------------------------------|
-| Scene graph | Built-in editor, drag & drop | We construct the entire scene graph in code — every `Group`, `Mesh`, `InstancedMesh` is manually assembled |
-| Materials | Preset shader graphs (Principled BSDF / URP) | We configure `MeshStandardMaterial` and `MeshPhysicalMaterial` by hand — setting roughness, metalness, clearcoat, emissive maps, normal maps individually |
-| Lighting | Place lights in editor, adjust via sliders | We create `HemisphereLight`, `DirectionalLight`, `PointLight` programmatically, animate their intensities/colors per frame, and manage shadow maps in code |
-| Camera | Timeline animation in editor | We build CatmullRomCurve3 splines with 49 hand-placed waypoints and write the interpolation logic ourselves |
-| Post-processing | Add components from dropdown | We write GLSL fragment shaders for chromatic aberration, film grain, vignette; configure bloom pass with dynamic parameters |
-| Textures | Import in editor, UV unwrap | We load PBR texture sets (color, normal, roughness, metalness, AO, emission) via TextureLoader, set wrapping/repeat/anisotropy in code |
-| Rendering | Press play | We manage the render loop, delta time, shadow map update frequency, tone mapping, color space — all in code |
+For reference, here is what we implement in code and what its Blender/Unity equivalent would be:
+- Blender's Principled BSDF shader → we configure physically-based materials (PBR) with individual maps for color, normals, roughness, metalness, ambient occlusion, and emission
+- Blender's particle system → we build particle systems from raw float arrays, writing the physics (gravity, velocity, air resistance) ourselves
+- Blender's keyframe animation → we use mathematical spline curves and sinusoidal functions to drive all motion
+- Blender's compositor nodes → we chain render passes: a scene render, then a bloom pass, then a custom GLSL shader for chromatic aberration, film grain, and vignette
+- Blender's HDRI environment lighting → we load EXR environment maps and pre-filter them into mipmap chains for roughness-dependent reflections
 
-**Key argument**: In Unity, you click "Add Component → Bloom". In our project, we write `new UnrealBloomPass(resolution, strength, radius, threshold)` and dynamically adjust all parameters per-frame based on day/night cycle. We understand *what* bloom does (bright pixel extraction → gaussian blur → additive composite) because we control it.
-
-**Blender equivalences we implemented in code:**
-- Blender's Principled BSDF → our `MeshStandardMaterial` with PBR maps (Cook-Torrance BRDF under the hood)
-- Blender's particle system → our `BufferGeometry` + `Points` for rain, atmosphere, fountain spray
-- Blender's keyframe animation → our spline curves + `Math.sin`-based oscillations
-- Blender's compositor → our `EffectComposer` with render pass, bloom pass, custom shader pass
-- Blender's HDRI lighting → our EXR environment maps with `PMREMGenerator`
+The point: we understand what these tools do internally because we built the equivalent ourselves.
 
 ---
 
-## 2. Computer Graphics Concepts Used
+## How the Rendering Works — From GPU to Screen
 
-### 2.1 Rendering Pipeline (WebGL 2)
-- **Vertex processing**: Vertices transformed by model → view → projection matrices (`projectionMatrix * modelViewMatrix * vec4(position, 1.0)` in our GLSL vertex shader)
-- **Fragment processing**: Per-pixel color computation in fragment shaders (our CinematicShader)
-- **Rasterization**: WebGL converts triangles to fragments; we control output via `THREE.WebGLRenderer`
-- **Depth buffer**: Z-buffer for occlusion; we selectively disable depth writes (`depthWrite: false`) for transparent/additive objects like neon glows, rain, fog
+Everything starts with WebGL 2, the browser's interface to the GPU. Our renderer is configured with several important settings that directly map to CG theory:
 
-### 2.2 Transformations
-- **Model matrix**: Each mesh has position, rotation, scale → combined into `Object3D.matrix`
-- **View matrix**: Camera's inverse world matrix — `camera.lookAt(target)` computes this
-- **Projection matrix**: `PerspectiveCamera(fov=55, aspect, near=0.8, far=2400)` — 55° FOV gives dramatic perspective compression for a cinematic urban look
-- **Instanced transforms**: For InstancedMesh (buildings, trees, bushes, neon panels), each instance has its own 4×4 matrix set via `setMatrixAt()` — the GPU applies per-instance transforms in a single draw call
+**The rendering pipeline** follows the classic stages. Every mesh in our scene is defined by vertices (positions in 3D space). The GPU's vertex stage transforms each vertex through three matrices — the **model matrix** (where is this object in the world?), the **view matrix** (where is the camera looking from?), and the **projection matrix** (how does 3D map onto a 2D screen?). In GLSL, this is the familiar `gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0)`. After vertex processing, the GPU rasterizes triangles into fragments (candidate pixels), and the fragment shader computes the final color of each pixel using material properties, lighting, and textures.
 
-### 2.3 Lighting Model — Physically Based Rendering (PBR)
-Three.js uses the **Cook-Torrance microfacet BRDF** internally:
+Our camera uses a **perspective projection** with a 55-degree field of view. We chose 55 degrees rather than the more common 60 or 75 because it creates a slight telephoto compression effect — buildings look more imposing, streets feel longer, and the overall framing feels cinematic rather than wide-angle.
+
+For **depth** (determining which objects are in front of others), WebGL uses a Z-buffer. Every fragment writes its depth, and if another fragment at the same pixel is closer, it overwrites it. We selectively disable depth writing for certain transparent objects — neon glows, rain particles, fog volumes — because these objects should layer on top of each other additively rather than occluding one another.
+
+**Tone mapping** is how we handle the fact that our scene has brightness values far exceeding what a monitor can display. A neon sign might have a brightness of 3.0 in our internal HDR representation, but the screen can only show 0.0–1.0. We use ACES Filmic tone mapping — the same S-curve used in Hollywood film post-production — which gracefully compresses bright highlights while preserving shadow detail. We also dynamically adjust the exposure (0.80–1.60) based on camera altitude and time of day, simulating how a real camera or human eye adapts to brightness. At street level at night, exposure is boosted so you can see road detail; high in the sky during the day, it's pulled back to avoid blowout.
+
+The final output is in **sRGB color space** with gamma correction, ensuring colors appear perceptually correct on standard monitors.
+
+---
+
+## Building the World — From Empty Scene to Living City
+
+### The City Layout
+
+The city is organized around a central fountain plaza at the origin (0, 0, 0), with five themed districts radiating outward:
+
+- **Financial Core** (center, within 80 units): 12 glass skyscrapers reaching up to 220 units tall — the most imposing structures
+- **Entertainment District** (east): 16 buildings covered in neon facades and shop signs, heights 55–110
+- **Residential District** (west): 17 buildings with warm window lighting, heights 42–60, more trees between them
+- **Industrial District** (north): 6 wide, low warehouses in metal and concrete, heights 28–38
+- **Civic/Park District** (south): 6 low civic buildings with open spaces, heights 20–28
+
+The street grid consists of 7 east-west streets and 5 north-south avenues. The Grand Boulevard (east-west, z=0) is the widest at 36 units; the Grand Avenue (north-south, x=0) is 28 units wide. Side streets are 22 units. Every street and avenue has a name in the code (`BLVD_Z`, `ST_N1`, `AVE_EAST`, etc.), and width functions return the correct size for any given road.
+
+### How Buildings Are Constructed
+
+Each building starts as a box — a `BoxGeometry(width, height, depth)` — positioned so its base sits on the ground (we shift it up by half its height). Every one of the 60 buildings has hand-picked coordinates, dimensions, and a material type. There are five material categories, each using a different set of **physically-based rendering (PBR) textures**:
+
+1. **Glass facades** (Financial Core) — full PBR set: color map, normal map, roughness map, metalness map, emission map, ambient occlusion map
+2. **Residential facades** — color, normal, roughness, metalness maps; warmer tones
+3. **Metal** (Industrial) — industrial steel look
+4. **Concrete** (Civic/Industrial) — matte, rough surfaces
+5. **Neon Facade** (Entertainment) — brightest emissive glow, most colorful at night
+
+Now, what are all these texture maps actually doing?
+
+The **color map** (also called albedo) provides the base color of the surface — the "paint" of the material. The **normal map** is more interesting: it encodes tiny surface bumps and grooves as RGB values that represent XYZ normal directions. When the lighting shader reads a normal map, it perturbs the surface normal at each pixel, creating the illusion of detailed surface geometry (brick lines, panel seams, scratches) without adding any actual polygons. The **roughness map** tells the shader how microscopically smooth or rough each pixel is — a smooth pixel creates a tight, bright specular highlight, while a rough pixel creates a wide, dim one. The **metalness map** classifies each pixel as metallic or dielectric (non-metallic), which changes how it reflects light: metals tint their reflections with their base color, while dielectrics reflect white. The **ambient occlusion map** contains pre-baked soft shadows in crevices and corners, darkening those areas to add depth. The **emissive map** marks which pixels glow — for building facades, this is the window texture, making lit windows shine independently of scene lighting.
+
+For every texture, we set it to tile (`RepeatWrapping`) and repeat at appropriate scales — for example, asphalt tiles 3 times across the road width and 80 times along its length. We also enable **anisotropic filtering** at level 8, which prevents textures from becoming blurry when viewed at steep angles — critical for long roads stretching into the distance.
+
+Under the hood, these PBR materials use the **Cook-Torrance microfacet BRDF**, which is the industry-standard physically-based lighting equation:
 
 ```
-f(l,v) = D(h) * F(v,h) * G(l,v,h) / (4 * (n·l) * (n·v))
+f(l,v) = D(h) * F(v,h) * G(l,v,h) / (4 * (n.l) * (n.v))
 ```
 
-- **D** (Normal Distribution): GGX/Trowbridge-Reitz — controls highlight shape from `roughness`
-- **F** (Fresnel): Schlick approximation — reflectivity at grazing angles from `metalness`
-- **G** (Geometry/Shadowing): Smith-GGX — self-shadowing of microfacets
+**D** is the GGX normal distribution function — it describes how microfacets are oriented, controlled by roughness. A low roughness means most microfacets point in the same direction, creating sharp reflections. **F** is the Fresnel term (Schlick's approximation) — it makes surfaces more reflective at grazing angles, which is why you can see reflections on a road at a low angle but not when looking straight down. **G** is the geometry/shadowing function (Smith-GGX) — it accounts for microfacets blocking each other. Together, these three terms produce realistic material appearance from a handful of texture inputs.
 
-**Our materials demonstrate this**:
-| Material | Roughness | Metalness | Effect |
-|----------|-----------|-----------|--------|
-| Glass facades | from texture | from texture | Sharp reflections, visible env map |
-| Road (wet) | 0.62 | 0.15 | Subtle wetness shimmer |
-| Road clearcoat | dynamic 0.15–0.55 | — | Extra specular layer for wet look at night |
-| Car body | 0.22 | 0.72 | Highly metallic, sharp reflections |
-| Sidewalk paving | 0.78 | 0.04 | Diffuse, matte concrete |
-| Lamp poles | 0.45 | 0.70 | Brushed metal appearance |
+### Procedural Textures — Generated at Runtime
 
-### 2.4 Texture Mapping
-We use **PBR texture sets** from ambientCG (1K resolution):
+Not every texture is loaded from a file. We generate several at runtime by drawing on HTML Canvas elements and uploading the result to the GPU:
 
-- **Color/Albedo map** (`map`): Base color of the surface
-- **Normal map** (`normalMap`): Encodes surface micro-detail as RGB → XYZ normals. Perturbs the shading normal per-pixel without adding geometry. Our facades use `normalScale: new Vector2(0.8, 0.8)` to control intensity
-- **Roughness map** (`roughnessMap`): Per-pixel roughness variation — e.g., worn edges vs smooth centers on concrete
-- **Metalness map** (`metalnessMap`): Per-pixel metallic/dielectric classification
-- **Ambient Occlusion map** (`aoMap`): Pre-baked soft shadows in crevices — multiplied into diffuse
-- **Emissive map** (`emissiveMap`): Pixels that glow (window lights on facades)
-- **UV coordinates**: `PlaneGeometry`, `BoxGeometry`, `CylinderGeometry` all generate default UVs. We control tiling via `texture.repeat.set(rx, ry)` — e.g., asphalt repeats 3×80 across the road length
-- **Anisotropic filtering**: `texture.anisotropy = 8` — reduces blur when textures are viewed at oblique angles (critical for roads stretching into distance)
+- **Window grids**: A 256x512 canvas where we draw a grid of colored rectangles. A hash function (`sin(col * 127.1 + row * 311.7) * 43758.5`) deterministically decides which windows are on or off, and whether they're warm (yellow, amber) or cool (blue, cyan, pink). This canvas becomes the emissive map on building facades, so at night, scattered windows glow in different colors.
+- **Shop signs**: We render text labels like "NEXUS", "CYBER BAR", "RAMEN", "DRONE HUB" onto canvas with colored borders and glow effects. These become textures on planes mounted to Entertainment district buildings.
+- **Holographic billboards**: Gradient backgrounds with scanline overlays and large text — mounted on the tallest buildings. These pulse in opacity to simulate flickering holograms.
+- **Crosswalk stripes**: Simple striped patterns applied semi-transparently at every intersection.
+- **Cloud puffs**: 8 overlapping radial-gradient ellipses drawn on a 512x256 canvas, creating a fluffy cloud texture used on billboard planes in the sky.
 
-### 2.5 Procedural Textures (Canvas API → CanvasTexture)
-Instead of using image files for everything, we generate textures at runtime:
+### Building Decorations
 
-- **Window grid texture** (`makeWindowTex`): 256×512 canvas, draws colored rectangles in a grid pattern. Uses hash function for pseudo-random on/off windows and warm/cool color variation. Becomes the `emissiveMap` on building facades → windows glow at night
-- **Shop sign texture** (`makeSign`): Renders text labels ("NEXUS", "CYBER BAR", "RAMEN" etc.) with glow effects
-- **Holographic billboard texture** (`makeHolo`): Gradient background + scanlines + outlined text — simulates a holographic display
-- **Crosswalk texture**: Canvas with striped pattern, applied as semi-transparent overlay on intersections
-- **Cloud texture** (`makeCloudTex`): 512×256 canvas, draws 8 overlapping radial-gradient ellipses for fluffy cloud puffs
+Beyond the basic box shape, each building receives layers of detail:
 
-### 2.6 Shading & Custom Shaders (GLSL)
-Our `CinematicShader` is a post-processing fragment shader:
+- **500 neon panels** distributed across building faces at random heights and positions. Each is a thin glowing box with a unique color sampled from our neon palette (cyan, magenta, purple, blue with HSL variance). They use **additive blending** — their color adds to whatever is behind them rather than replacing it, which is physically correct for light emission. Overlapping neon panels produce brighter areas naturally.
+- **400 horizontal neon strips** — thin glowing lines that wrap around tall buildings, giving them a "Tron"-like banded appearance.
+- **Shop signs with point lights** — text signs on Entertainment and Financial buildings, each with a colored point light nearby that casts actual illumination onto the surroundings.
+- **Holographic billboards** on the tallest buildings — large pulsing translucent planes.
+- **Rooftop beacons** on the top 10 tallest buildings — pulsing point lights (range 180 units, intensity up to 42) with glowing sphere meshes. These are visible from across the city.
+- **Light spill planes** — 200 semi-transparent colored planes on the ground around building bases, simulating the glow that building lights cast onto nearby pavement.
 
-```glsl
-// Chromatic aberration — splits RGB channels based on distance from center
-float aberration = uChromaOffset * dist * dist;  // quadratic falloff
-float r = texture2D(tDiffuse, uv + dir * aberration).r;
-float g = texture2D(tDiffuse, uv).g;
-float b = texture2D(tDiffuse, uv - dir * aberration).b;
+All neon panels, strips, light spills, and puddles use **instanced rendering** — a single draw call handles all 500 neon panels, for example, because they share the same geometry and material but differ only in their per-instance 4x4 transform matrix and color. This is the single biggest performance optimization: instead of the GPU processing 500 separate draw calls (each with CPU overhead for state changes), it processes one call with 500 instances.
 
-// Film grain — pseudo-random noise
-float grain = rand(uv * uTime * 0.01) * uGrainIntensity;
+---
 
-// Vignette — darken edges
-float vignette = 1.0 - dist * 0.6;
+## Streets, Sidewalks, and Ground Details
+
+Roads use a **MeshPhysicalMaterial** — a more advanced material type that supports a **clearcoat** layer. Clearcoat simulates a thin transparent lacquer on top of the base material. On our roads, this creates the wet-road look you see in film noir: at night, the clearcoat value increases from 0.15 to 0.55, making the road surface shinier, reflecting neon lights and headlights. The underlying asphalt texture (from a PBR set: color, normal, roughness) provides the gritty base, while the clearcoat adds that wet sheen on top.
+
+Center road markings use a separate texture set with an **alpha map** (opacity mask) — the paint lines are opaque where the alpha is white, and transparent everywhere else, so the asphalt shows through between the lines. Main roads also get **neon edge strips** — thin glowing lines along both edges using additive blending.
+
+Sidewalks sit 2.2cm above road level (matching real-world curb height proportionally) with paving stone PBR textures and concrete curbs. Crosswalks at every intersection use the procedurally-generated striped texture.
+
+**50 puddles** are scattered on roads using instanced rendering. Each puddle is a circle with `MeshPhysicalMaterial` set to very low roughness (0.06), moderate metalness (0.25), and full clearcoat — making them highly reflective, mirror-like spots on the road surface.
+
+---
+
+## The Fountain — Water Simulation and Vertex Displacement
+
+At the center of the city sits a two-tiered circular fountain. The lower basin is a disc of radius 9.6 units; the upper tier sits at 1.8 units height with radius 4.5. A central spire rises to 6.5 units with an emissive glow. Six colored lights ring the basin, slowly cycling through the hue spectrum.
+
+The water surface demonstrates **vertex displacement** — one of the most direct applications of manipulating geometry at runtime. Each frame, we iterate through every vertex of the water mesh and modify its Y (height) coordinate:
+
+The water has three overlapping wave patterns:
+1. **Expanding concentric rings**: `sin(distance * 0.8 - time * 3.5) * 0.18 * edgeFactor` — these radiate outward from the center. The `edgeFactor` (distance/radius) makes the center calm and the edges active, mimicking how a central fountain jet creates ripples that grow as they travel outward.
+2. **Faster secondary ripples**: `sin(distance * 1.6 - time * 5.0 + 1.2) * 0.10` — a higher frequency wave traveling at a different speed, creating realistic interference patterns.
+3. **Cross-interference waves**: `sin(x * 0.5 + time * 2.0) * cos(z * 0.5 + time * 1.8) * 0.08` — the product of two perpendicular sine waves creates a choppy, turbulent pattern.
+
+After modifying vertex positions, the lighting needs updated surface normals. We call `computeVertexNormals()` to recalculate normals based on the new geometry — but only every 3rd frame, because this is computationally expensive and the visual difference at 60fps is imperceptible.
+
+The upper tier has its own simpler ripple pattern simulating vigorous splashing from the central jet impact.
+
+Cascade rings (torus shapes) between the tiers simulate water overflow, with pulsing opacity to suggest flowing water.
+
+### Fountain Spray Particles
+
+500 particles simulate the water spray using **Euler integration** — the simplest numerical method for physics simulation:
+
+```
+velocity.y -= gravity * deltaTime    // acceleration changes velocity
+position   += velocity * deltaTime    // velocity changes position
 ```
 
-- **Chromatic aberration**: Simulates lens imperfection — red channel shifts outward, blue shifts inward, proportional to `dist²` from center
-- **Film grain**: Hash-based noise using `fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453)` — classic GPU random function
-- **Vignette**: Linear darkening from center to edges
+The particles are organized into three subsystems:
+- **150 central jet particles**: Launch upward from the spire tip with velocity 3–6 m/s, heavy gravity (16 m/s²), creating a tall narrow column that arcs back down
+- **240 ring jet particles**: 8 jets evenly spaced around the upper tier rim, each launching outward and upward in a parabolic arc that lands in the lower basin
+- **110 splash mist particles**: Low, wide, slow-moving particles around the basin rim with air resistance (velocity damped by 2% per frame), simulating the fine mist that hangs around the base of any large fountain
 
-### 2.7 Shadow Mapping
-- **Technique**: PCF (Percentage-Closer Filtering) Shadow Map — samples multiple depth texels and averages for soft shadow edges
-- **Two shadow casters**: `moonLight` (night) and `sunLight` (day), both `DirectionalLight` with orthographic shadow cameras (500×500 unit coverage, 1024² map resolution)
-- **Optimization**: `renderer.shadowMap.autoUpdate` toggled — only recomputes shadow maps every 3rd frame. Shadow geometry is mostly static (buildings don't move), so this saves significant GPU time
-- **Shadow receivers**: Ground plane, sidewalks, roads — set via `mesh.receiveShadow = true`
-- **Shadow casters**: Buildings, trees, cars — set via `mesh.castShadow = true`
+Each particle has a lifetime; when it expires or falls below the water surface, it resets to its launch position with fresh random velocity.
 
-### 2.8 Image-Based Lighting (IBL)
-- Two **EXR environment maps**: `dikhololo_night_1k.exr` (night sky) and `kloppenheim_02_1k.exr` (daytime outdoor)
-- Processed through `PMREMGenerator` (Pre-filtered Mipmap Radiance Environment Map) — generates mip levels for different roughness values. Rough surfaces sample blurry mips, smooth surfaces sample sharp mips
-- `scene.environment` is swapped when `daylight` crosses 0.5 threshold
-- `scene.environmentIntensity` interpolates 0.35 (night) → 1.0 (day) for correct ambient contribution
+---
 
-### 2.9 Bloom (HDR Post-Processing)
-- **UnrealBloomPass**: Extracts pixels above brightness threshold → applies multi-pass Gaussian blur → composites additively
-- Parameters animated by day/night:
-  - Night: strength=0.60, radius=0.50, threshold=0.70 (lots of bloom on neon)
-  - Day: strength=0.12, radius=0.20, threshold=0.85 (subtle sun bloom)
-- Objects with `AdditiveBlending` and high opacity naturally exceed the threshold → bloom halos
+## Lighting — How the Scene is Illuminated
 
-### 2.10 Tone Mapping & Color Space
-- **ACES Filmic Tone Mapping**: Maps HDR luminance to displayable [0,1] range with an S-curve. Preserves detail in highlights and shadows. Industry standard (used in film/VFX)
-- **Exposure**: Dynamically adjusted (0.80–1.60) based on altitude and day/night — simulates eye adaptation
-- **sRGB Color Space**: `renderer.outputColorSpace = THREE.SRGBColorSpace` — applies gamma correction for perceptually correct display
+Lighting is arguably the most complex system in the project because nearly every light in the scene is animated.
 
-### 2.11 Alpha Blending & Transparency
-- **Standard alpha blending**: `transparent: true, opacity: value` on materials. Uses `src * alpha + dst * (1 - alpha)` compositing
-- **Additive blending**: `blending: THREE.AdditiveBlending` — `src + dst`. Used for all glow effects (neon panels, lamp glows, fog volumes, rain, atmosphere particles, clouds). Additive blending makes overlapping glows brighter, which is physically correct for light emission
-- **Depth write disabled** (`depthWrite: false`): For transparent objects, prevents them from occluding other transparent objects behind them. Critical for correct rendering of overlapping neon panels, fog, particles
+### Light Types and Their Roles
 
-### 2.12 Fog
-- **Exponential fog** (`FogExp2`): `density * e^(-distance*density)` — more natural than linear fog
-- Density dynamically adjusted: denser at street level (0.0012), thinner at altitude (0.0003)
-- Color interpolated between night purple `#04080f` and day blue `#7ab4cc`
-- Additional **volumetric fog planes** (20 semi-transparent planes in city.js) simulate ground-level haze — placed along streets, slowly drifting, color-matched to time of day
+**Hemisphere light** provides base ambient illumination — it simulates light coming from the sky (upper hemisphere, blue-tinted) and ground bounce (lower hemisphere, warm-tinted). Its intensity ranges from 0.25 at night to 1.35 during the day, and its hue shifts per frame.
 
-### 2.13 Particle Systems
-We implement 4 independent particle systems using `BufferGeometry` + `Points`:
+**Two directional lights** represent the sun and moon. Directional lights simulate infinitely distant light sources where all rays are parallel — exactly how sunlight and moonlight behave. The sun ramps from 0 to 5.0 intensity during the day; the moon from 0.12 to 0.72 at night. Both cast **shadow maps**.
 
-| System | Count | Technique | Update |
-|--------|-------|-----------|--------|
-| Rain | 2500 | Velocity + gravity, pre-computed wind sway arrays | Per-frame position update, reset on ground hit |
-| Atmosphere dust | 380 | Slow rotation, follows camera | Color from neon palette, additive blending |
-| Fountain spray | 500 | 3 sub-systems: central jet (150), ring jets (240), splash mist (110) | Physics simulation: velocity, gravity (16/14/4 m/s²), air resistance, lifetime reset |
-| Clouds | 80 planes | Billboard planes (2 cross-planes per puff for volume), canvas texture | Slow drift, opacity by camera proximity |
+Shadow mapping works by rendering the scene from the light's perspective into a depth texture (the shadow map). When rendering the main scene, each pixel checks: "if I project this point into the light's depth map, is something closer blocking it? If yes, this pixel is in shadow." We use **PCF (Percentage-Closer Filtering)** which samples multiple neighboring depth values and averages the result, producing soft shadow edges instead of harsh aliased ones. Each shadow map is 1024x1024 pixels with an orthographic camera covering a 1000x1000 unit area.
 
-**Fountain spray physics**:
+**Four orbiting accent lights** (two magenta, two cyan) slowly circle the city at mid-altitude. These are purely aesthetic — they cast colored light onto building facades and streets, creating the cyberpunk color palette. Their intensities surge from 2–3 during the day to 22–28 at night.
+
+**~20 street-level point lights** along the boulevard and grand avenue provide ground-level illumination, ranging from intensity 5 (day) to 40 (night).
+
+**~120 lamp post lights** line every sidewalk. Each lamp post has: a pole mesh (cylinder), a glow sphere (additive blending), and a ground light pool (a flat circle on the pavement, also additive). If a GLTF lamp model loads, it replaces the cylinder; otherwise the simple geometry serves as a fallback.
+
+**6 fountain ring lights** cycle through HSL color space, creating slowly shifting rainbow illumination on the water.
+
+**Per-car headlights**: Each car has a point light with range 12 units, casting a warm pool of light ahead of it.
+
+**Per-sign lights**: Each shop sign has an associated colored point light that illuminates nearby surfaces.
+
+**10 rooftop beacons**: Pulsing aviation-style lights on the tallest buildings, with glowing sphere meshes visible from anywhere in the city.
+
+### Shadow Optimization
+
+Shadow maps are expensive — rendering the entire scene from the light's viewpoint is essentially rendering the scene twice. Since buildings don't move, we only update shadow maps every 3rd frame. The visual cost of a 3-frame-old shadow is negligible, but the performance gain is significant. Only 2 of the 150+ lights cast shadows; the rest contribute illumination without the shadow map cost.
+
+### Image-Based Lighting (IBL)
+
+Beyond direct lights, surfaces also reflect the environment around them. We load two **EXR environment maps** (high dynamic range photographs of real environments): one of a night sky, one of a daytime outdoor scene. These are processed through a **PMREMGenerator** (Pre-filtered Mipmap Radiance Environment Map) — this pre-computes blurred versions of the environment at multiple mip levels. When a shader samples the environment for a reflection, a rough surface (say, concrete at roughness 0.78) samples a heavily blurred mip level and sees only vague color, while a smooth surface (say, a car body at roughness 0.22) samples a sharp mip and sees clear reflections. This is physically accurate: rougher surfaces scatter reflected light more, producing blurry reflections.
+
+The active environment map swaps between day and night when the daylight value crosses 0.5, and the environment intensity interpolates between 0.35 (dim night) and 1.0 (bright day).
+
+---
+
+## The Camera — Spline Fly-Through
+
+The camera follows a predefined path through the city, implemented using a **Catmull-Rom spline** — a type of cubic interpolating spline that passes exactly through its control points (unlike Bezier curves, which are pulled toward control points but don't necessarily touch them).
+
+We define 49 waypoints for the camera position and 49 corresponding waypoints for the look-at target. The Catmull-Rom algorithm generates a smooth, continuous curve through all 49 points. We use the **centripetal** parameterization (tension 0.5), which prevents cusps and overshooting that can occur with uniform parameterization — this is the same method used in film camera path tools.
+
+The curve is **closed** (loops seamlessly), so the camera returns to its starting point after 180 seconds. The parameter `t` advances linearly: `t = (elapsed % 180) / 180`, giving constant speed along the curve. We evaluated whether to use an easing function at the loop seam, but found that the centripetal Catmull-Rom curve is already smooth at the seam point, so linear parameterization produces the smoothest result.
+
+### The Flight Path
+
+The camera takes a dramatic tour:
+- Starts at altitude 400, looking down through clouds at the entire city
+- Descends in a spiral through the cloud layer (y=400→120)
+- Sweeps across the Financial Core rooftops
+- Dives to street level on the Grand Avenue, heading toward the Entertainment district
+- Weaves between neon-lit buildings
+- Turns north along the East Avenue
+- Arcs west through the Industrial district
+- Circles the central fountain at near-ground level (y=4–8)
+- Climbs along the Residential avenue
+- Rises back to y=80 to close the loop
+
+Every waypoint was verified against the building layout — the camera never clips through a building. Ground-level waypoints follow road centerlines.
+
+### Altitude-Adaptive Camera Behavior
+
+The camera doesn't just follow the spline blindly. Based on its current altitude, it adds subtle behavioral variations using **smoothstep blending** — a smooth mathematical interpolation function that transitions from 0 to 1 over a defined range without sudden jumps:
+
 ```
-velocity.y -= gravity * delta;  // gravity integration (Euler method)
-position += velocity * delta;   // position integration
-// Air resistance on splash mist: velocity *= 0.98 per frame
-```
-
-### 2.14 Curves & Splines
-- **CatmullRomCurve3**: Centripetal Catmull-Rom spline through 49 waypoints, `closed=true` for seamless loop
-- Tension parameter 0.5 (centripetal) — prevents cusps and overshooting
-- Two curves: one for camera position, one for look-at target
-- `curve.getPoint(t)` returns interpolated Vector3 at parameter t ∈ [0,1]
-- Linear parameter mapping: `t = (elapsed % 180) / 180` — constant speed along curve
-
-### 2.15 Instanced Rendering
-**The single most important optimization.** Instead of 60 separate draw calls for 60 buildings:
-
-- **5 InstancedMesh objects** (one per facade material) each rendering ~12 buildings = **5 draw calls** total
-- Each instance gets a unique 4×4 transform matrix and optional per-instance color
-- Same geometry + material, different transforms → GPU processes all instances in one batch
-- Also used for: neon panels (500), neon strips (400), puddles (50), light spills (200), trunks/canopies/bushes (3 meshes)
-
-**Total draw call reduction**: ~1200+ individual meshes → ~15 instanced draw calls
-
----
-
-## 3. Building System
-
-### 3.1 Layout
-60 buildings across 5 themed districts, hand-placed with explicit `{x, z, w, d, h, mat}`:
-- **Financial Core** (center): 12 glass skyscrapers, h=115–220
-- **Entertainment** (east): 16 neon-facade buildings, h=55–110
-- **Residential** (west): 17 warm-windowed buildings, h=42–60
-- **Industrial** (north): 6 wide warehouses, h=28–38
-- **Civic/Park** (south): 6 low civic buildings, h=20–28
-
-### 3.2 Construction
-Each building = `BoxGeometry(w, h, d)` positioned at `(x, h/2, z)` (half-height lift so base sits on ground).
-
-5 facade material types, each `MeshStandardMaterial` with full PBR texture set:
-1. **Glass** (`Facade018A`): color + normal + roughness + metalness + emission + AO maps. Emissive base 0.70
-2. **Residential** (`Facade001`): color + normal + roughness + metalness. Emissive base 0.80
-3. **Metal** (`Metal032`): Industrial look. Emissive base 0.45
-4. **Concrete** (`Concrete034`): Civic/industrial. Emissive base 0.35
-5. **Neon Facade** (`Facade009`): Entertainment district, brightest emissive base 1.10
-
-**Procedural emissive window maps**: A `makeWindowTex(cols, rows)` function generates a 256×512 canvas texture with randomized lit/unlit windows using a hash function. Applied as `emissiveMap` — windows glow based on `emissiveIntensity` which scales with night factor.
-
-### 3.3 Rooftops
-Every building gets a flat rooftop with concrete PBR material, slightly inset from building edges.
-
-### 3.4 Building Decorations
-- **Neon panels**: 500 instances of `BoxGeometry(1,1,0.1)` placed on building faces at random heights. Each gets a unique neon color via `sampleNeon()`. Additive blending for glow
-- **Neon strips**: 400 horizontal glowing lines on tall buildings (h>45)
-- **Shop signs**: Text-based canvas textures ("NEXUS", "CYBER BAR", "RAMEN" etc.) on entertainment + glass buildings. Each has an associated PointLight
-- **Holographic billboards**: Large 16×8 planes on buildings taller than 100 units, with procedural gradient + scanline textures
-- **Rooftop beacons**: Top 10 tallest buildings get pulsing PointLights (intensity 28, range 180) + glowing spheres
-- **Light spill**: 200 glowing planes on the ground around building bases, colored by neon palette
-
----
-
-## 4. Street & Road System
-
-### 4.1 Grid
-- 7 east-west streets (including Grand Boulevard at z=0, width 36)
-- 5 north-south avenues (including Grand Avenue at x=0, width 28)
-- Named constants: `BLVD_Z`, `ST_N1`, `ST_S2`, `AVE_EAST`, etc.
-
-### 4.2 Materials
-- **Road surface**: `MeshPhysicalMaterial` with asphalt PBR textures + dynamic clearcoat (0.15 day → 0.55 night) for wet-road reflections
-- **Center lines**: Separate road-line PBR textures with alpha map
-- **Neon edge strips**: On main boulevard and grand avenues — glowing cyan/magenta edge lines with additive blending
-- **Sidewalks**: Paving stone PBR textures, elevated 0.022 units with concrete curbs (BoxGeometry, height 0.2)
-- **Crosswalks**: Canvas-generated striped texture, semi-transparent (opacity 0.32) at every intersection
-
-### 4.3 Puddles
-50 `InstancedMesh` circles on roads with `MeshPhysicalMaterial`: metalness 0.25, roughness 0.06, clearcoat 1.0, clearcoatRoughness 0.04 — highly reflective wet spots.
-
----
-
-## 5. Fountain & Water
-
-### 5.1 Structure
-Central plaza at origin, radius ~20 units:
-- Two-tier circular fountain: lower basin (radius 9.6) + upper tier (radius 4.5, elevated 1.8)
-- Central spire (CylinderGeometry, height 6.5) with emissive glow
-- Spire halo (SphereGeometry, additive blending)
-- 6 ring lights around the basin edge — slow HSL color cycling
-- Cascade rings (TorusGeometry) simulating water overflow between tiers
-
-### 5.2 Water Surface Animation (Vertex Displacement)
-The water mesh's vertex positions are modified every frame:
-
-```javascript
-// Three layered wave patterns on the lower basin
-const wave1 = Math.sin(dist * 0.8 - t * 3.5) * 0.18 * edgeFactor;  // expanding rings
-const wave2 = Math.sin(dist * 1.6 - t * 5.0 + 1.2) * 0.10;        // faster ripples
-const wave3 = Math.sin(bx * 0.5 + t * 2.0) * Math.cos(bz * 0.5 + t * 1.8) * 0.08;  // cross-waves
-wPos.array[i * 3 + 1] = baseY + wave1 + wave2 + wave3;
+streetFactor = 1 - smoothstep(altitude, 10, 60)   // 1 at ground, fading to 0 by altitude 60
+highFactor   = smoothstep(altitude, 150, 250)       // 0 below 150, fading to 1 by altitude 250
 ```
 
-- **Concentric waves** (`wave1`): Amplitude scales with `edgeFactor = dist/9.6` — calm center, active edges
-- **Faster secondary ripples** (`wave2`): Uniform across surface, phase-offset
-- **Cross-interference** (`wave3`): Product of two orthogonal sine waves — creates choppy interference pattern
-- **Vertex normals**: `computeVertexNormals()` called every 3rd frame (throttled for performance) — ensures correct lighting on deformed mesh
+At **street level** (streetFactor near 1): the look-at target shifts upward at night (so the camera gazes at neon signs overhead) and slightly downward during the day (to see roads, trees, scenery). There's subtle left-right oscillation to simulate a pedestrian's natural head movement.
 
-### 5.3 Fountain Spray Particles
-500 particles in 3 sub-systems with physics simulation (see Section 2.13).
+At **high altitude** (highFactor near 1): the camera adds gentle banking sway — slow sinusoidal offsets to position and target that simulate a bird gliding over the city, looking around at the panorama.
+
+In the **mid-altitude range** (both factors near 0): the camera follows the spline cleanly with no added motion, preventing any jarring transitions between the two behavioral modes.
+
+The camera also adjusts based on **day vs. night**: at night, it looks more upward toward bright neon signs and beacons; during the day, it looks more outward to appreciate the scenery and geometry.
 
 ---
 
-## 6. Car System
+## Day/Night Cycle — The Math Behind Time of Day
 
-### 6.1 Placement
-~88 cars placed on named roads with explicit definitions:
-- Grand Boulevard: 20 cars (12 eastbound, 8 westbound)
-- Grand Avenue: 14 cars
-- East Avenue: 14 cars
-- West Avenue: 10 cars
-- Side streets: 6 cars each × 4 streets = 24 cars
+The entire scene transitions between day and night over 180 seconds using a single sinusoidal function:
 
-### 6.2 Car Mesh
-Each car is a `THREE.Group` with:
-- Body: `BoxGeometry(2.0, 1.1, 4.2)`, metallic PBR material (roughness 0.22, metalness 0.72)
-- Roof: Smaller box, darker color
-- Headlights: Small boxes with bright emissive material + glow sphere + PointLight (range 12)
-- Taillights: Red emissive boxes
-- 16-color palette: dark jewel tones (navy, purple, dark red) + neon accents (hot pink, magenta)
-
-If a GLTF car model is available (`Car.glb`), it replaces the box geometry with the detailed model, cloned per car with unique paint color.
-
-### 6.3 Motion
-Cars move at constant speed along their lane:
-```javascript
-travel += speed * 0.016 * direction;
-if (travel > 420) travel = -420;  // wrap around
+```
+cycle = 0.5 + 0.5 * sin(elapsed * 2π/180 + π/2)
 ```
 
-### 6.4 Collision Avoidance (Precomputed Blocked Intervals)
-Rather than checking collisions per-frame (expensive), we **precompute** static blocked intervals per lane at initialization:
+Breaking this down:
+- The `sin` function oscillates between -1 and +1
+- `0.5 + 0.5 * sin(...)` maps this to the range [0, 1]
+- The `2π/180` factor sets the period to 180 seconds
+- The `+π/2` phase offset starts at the peak (cycle=1 = bright day)
 
-1. For each lane (road + lane offset), test every building AABB:
-   - If the lane's cross-coordinate falls within a building's extent, record the building's travel-axis extent as a blocked interval
-2. Test fountain circle (radius 26): if lane crosses the circle, compute intersection chord
-3. Merge overlapping intervals
-4. At runtime: if car enters a blocked interval, teleport past it: `travel = hi + 0.5`
+The timeline:
+- t=0s: sin(π/2) = 1 → cycle = 1.0 (noon, brightest day)
+- t=45s: sin(π) = 0 → cycle = 0.5 (sunset)
+- t=90s: sin(3π/2) = -1 → cycle = 0.0 (midnight, darkest night)
+- t=135s: sin(2π) = 0 → cycle = 0.5 (sunrise)
+- t=180s: sin(5π/2) = 1 → cycle = 1.0 (noon again, loop complete)
 
-This is O(1) per car per frame (just interval membership test) instead of O(n_buildings) collision checks.
+The raw cycle value is then passed through `smoothstep(cycle, 0.18, 0.82)` to produce `daylight` — this flattens the extremes so that "full day" and "full night" each last longer, while dawn/dusk transitions happen smoothly over a shorter interval. This avoids the unrealistic look of a cycle that's always changing.
+
+`nightFactor = 1 - daylight` gives us the complementary value for night-specific effects.
+
+### The Sun's Orbit
+
+The sun doesn't just appear and disappear — it physically orbits across the sky. Its position is computed from the day/night cycle and the camera's current look direction:
+
+**Elevation**: `sunY = clamp(cycle * 2 - 1, -1, 1) * 500` — at noon (cycle=1), the sun is at altitude 500 (zenith). At cycle=0.5, it's at the horizon (y=0). Below cycle=0.5, it's below the horizon and hidden.
+
+**Horizontal position**: The sun orbits at a horizontal radius of `cos(elevation) * 1200` from the camera position. The clever part is that this orbit is **directed toward where the camera is looking** — so as the sun sets, it sets in the direction the camera faces, making the sunset visible on screen. During sunrise, the sun comes from the perpendicular left, creating an asymmetric and more cinematic motion. The `horizBlend` factor (1 at horizon, 0 at zenith) controls how much the sun's horizontal position is offset toward the camera's forward direction.
+
+**Sunset glow**: A large semi-transparent sphere (radius 200) centered on the sun produces a warm atmospheric glow. Its opacity peaks during the transition period (horizBlend * daylight * (1-daylight) * 4 reaches maximum when daylight is near 0.5 — i.e., dawn/dusk). During these transitions, the sky color and fog color also lerp toward warm orange tints.
+
+### What the Cycle Controls
+
+Nearly every visual property in the scene is driven by the daylight/nightFactor values:
+
+**Sky and atmosphere**: Sky color transitions from dark (#04080f) to blue (#5a9ec8). Fog color does the same. Fog density increases 40% at night for moodier atmosphere. The environment map swaps between night EXR and day EXR.
+
+**Lighting intensities**: Sun light 0→5, moon light 0.72→0.12, ambient 0.25→1.35, accent lights 2→25, street lights 5→40, shop sign lights 1.5→10. Every light in the scene responds to time of day.
+
+**Materials**: Building emissive intensity (window glow) ramps from 18% to 100% of base values. Neon panel opacity goes from 0.12 to 0.70. Road clearcoat (wet look) increases from 0.15 to 0.55. Road color itself shifts between warmer and cooler tones.
+
+**Post-processing**: Bloom strength increases from 0.12 (barely visible) to 0.60 (prominent neon glow). Bloom threshold decreases from 0.85 to 0.70, meaning more of the scene blooms at night. Exposure adjusts for overall brightness balance.
+
+**Celestial objects**: Stars are hidden entirely when nightFactor < 0.05 (full day) by toggling their visibility flag, which completely skips their draw call. Star opacity ramps to 0.96 at night. Moon glow ramps similarly.
+
+### The HUD Timeline Bar
+
+A minimal CSS bar at the bottom of the screen shows cycle progress. The track is a gradient (gold → orange → purple → dark → purple → orange → gold) representing the day-night spectrum. A marker dot moves linearly across it: `left = (elapsed % 180) / 180 * 100%`. The marker changes color — warm gold during day, cool blue during night.
 
 ---
 
-## 7. Camera System
+## Cars — Motion and Collision Avoidance
 
-### 7.1 Spline Path
-- **CatmullRomCurve3** with 49 waypoints, `closed=true`, tension 0.5 (centripetal)
-- Two parallel curves: position + look-at target
-- Total loop time: 180 seconds (matches day/night cycle period)
-- Parameter: `t = (elapsed % 180) / 180` — linear, constant speed
+~88 cars populate the road network. Each car is constructed as a group of meshes: a body box, a roof box, headlights (with a point light and glow sphere), and taillights. If an external GLTF car model loads, it replaces the box geometry — each clone gets a unique paint color from a 16-color palette of dark jewel tones and neon accents.
 
-### 7.2 Path Design
-The camera follows a cinematic route:
-1. **0–20s**: High altitude (y=400), bird's-eye view through clouds
-2. **20–50s**: Descending spiral (400→120), passing through cloud layer
-3. **50–80s**: Rooftop sweep along Financial Core (y=80)
-4. **80–120s**: Dive to street level on Grand Avenue, heading toward Entertainment district
-5. **120–155s**: Arc through Entertainment district between neon buildings
-6. **155–185s**: North along East Avenue at street level
-7. **185–215s**: West along Industrial streets
-8. **215–245s**: Circle the fountain plaza (y=4–8)
-9. **245–270s**: Climb along Residential avenue
-10. **270–300s**: Rise to y=80, banking south to close loop
+Cars move at constant speeds (12–28 units/second) along their lanes, wrapping around the city boundaries (±420 units). The interesting part is **collision avoidance with buildings and the fountain**.
 
-### 7.3 Altitude-Adaptive Behavior
-Rather than hard thresholds, we use **smoothstep blending**:
+Rather than checking every car against every building every frame (which would be expensive and complex), we **precompute blocked intervals at initialization**. For each lane (defined by which road it's on and a lateral offset for its direction), we:
 
-```javascript
-const streetFactor = 1 - smoothstep(altitude, 10, 60);  // 1 at ground, 0 above 60
-const highFactor = smoothstep(altitude, 150, 250);       // 0 below 150, 1 above 250
+1. Test every building's axis-aligned bounding box (AABB) against the lane. If the lane's cross-axis coordinate falls within the building's extent on that axis, we record the building's extent along the travel axis as a "blocked interval" — a range of positions the car cannot occupy.
+2. Test the fountain circle (radius 26 at origin). If the lane intersects the circle, we compute the chord of intersection and record it as a blocked interval.
+3. Merge all overlapping intervals.
+
+At runtime, when a car's position enters a blocked interval, we simply teleport it past: `position = intervalEnd + 0.5`. This is O(1) per car per frame — just a linear scan through the pre-sorted intervals — compared to O(n) building checks otherwise.
+
+---
+
+## Particle Systems — Rain, Atmosphere, Clouds, Fountain
+
+We implement four independent particle systems. Each stores particle positions in a raw `Float32Array`, updates them every frame with simple physics, and uploads the modified buffer to the GPU.
+
+**Rain (2500 particles)**: Each raindrop has a downward velocity (120–280 units/second) and per-particle wind sway. The wind sway is **pre-computed** into arrays at initialization (`windX[i] = sin(i * 12.9898) * 2.5`, `windZ[i] = cos(i * 4.123) * 8`), eliminating 5000 trigonometric function calls per frame. When a drop hits the ground, it respawns at a random position above the camera. The rain system follows the camera so it's always raining around the viewer.
+
+**Atmosphere dust (380 particles)**: Slow-moving colored specks that create a sense of depth and atmosphere. Each particle is colored from the neon palette. The entire system slowly rotates and follows the camera position. Opacity scales with night factor — more visible dust in the neon-lit night.
+
+**Clouds (40 cloud puffs, 80 planes)**: Each cloud puff is two perpendicular billboard planes (forming a cross shape) textured with the procedural cloud canvas. The cross arrangement gives the illusion of volume from any viewing angle. Clouds drift very slowly and their opacity depends on camera proximity — they're most visible when the camera is at cloud altitude (180–280 units), creating the immersive effect of flying through clouds during the descent phase.
+
+**Fountain spray (500 particles)**: Described in detail in the fountain section — three sub-systems with Euler physics integration, gravity, and air resistance.
+
+---
+
+## Post-Processing — The Final Image
+
+After the 3D scene renders, we apply three post-processing passes in sequence:
+
+**Pass 1 — Scene render**: The standard 3D render of the entire scene into a framebuffer.
+
+**Pass 2 — Bloom (UnrealBloomPass)**: This extracts all pixels brighter than a threshold, applies a multi-pass Gaussian blur to them, and composites the blurred result back additively. The result: bright objects (neon signs, lamps, sun) get soft glowing halos. At night, the threshold drops and strength increases, so more objects bloom more intensely — this is what gives the nighttime scene its signature neon glow.
+
+**Pass 3 — Cinematic shader (custom GLSL)**: A fragment shader we wrote that applies three effects:
+
+- **Chromatic aberration**: Splits the RGB channels slightly, with offset proportional to distance² from screen center. The red channel is sampled slightly outward, the blue slightly inward, and the green at the correct position. This simulates the way real camera lenses fail to focus all wavelengths to the same point, creating colored fringing at the edges. The effect is very subtle (0.15% offset) but adds a filmic quality.
+
+- **Film grain**: A per-pixel pseudo-random noise function (`fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453)`) modulated by time produces subtle grain that changes every frame, simulating the analog noise of film stock.
+
+- **Vignette**: A simple darkening toward screen edges (`1.0 - distance * 0.6`) that draws the viewer's eye toward the center and adds a cinematic frame.
+
+---
+
+## Vegetation — Trees and Bushes
+
+Trees and bushes are placed procedurally along sidewalks, around the fountain, and in park/residential areas. The placement algorithm applies multiple constraints to ensure no vegetation ends up in the middle of a road or inside a building:
+
+1. **Building collision check**: Test against every building's bounding box with a 2-unit buffer
+2. **Fountain exclusion**: No vegetation within 24 units of the origin
+3. **Universal road check** (`onAnyRoad`): Test against all 7 streets and 5 avenues with 1-unit buffer
+4. **Cross-road check**: Street-side trees skip positions where avenues cross (and vice versa) — preventing trees in the middle of intersections
+5. **Deduplication**: Minimum 8-unit spacing between trees
+6. **Hash-based density control**: `hash2D(x, z) > threshold` provides deterministic pseudo-random thinning for a natural distribution
+
+Trees are rendered as three instanced meshes (3 draw calls total): brown cylinders for trunks, green spheres for canopies, and smaller darker spheres for bushes. Each instance has a randomized scale and rotation.
+
+---
+
+## Noise Functions and Procedural Randomness
+
+Deterministic randomness is essential throughout the project — we need "random-looking" values that are the same every time the scene loads (so buildings, windows, trees are consistent). Our core function is:
+
+```
+hash2D(x, z) = fract(sin(x * 127.1 + z * 311.7) * 43758.5453)
 ```
 
-- **Street level** (streetFactor=1): Camera target shifts upward at night (look at neon signs), subtle side-to-side motion
-- **High altitude** (highFactor=1): Gentle banking sway (bird-gliding effect), look-target offsets for panoramic views
-- **Mid altitude**: Both factors near 0 — clean transition, no target jumps
+This takes any two coordinates and returns a pseudo-random value in [0, 1). The large prime multipliers and the transcendental sin function create chaotic but deterministic output. This is used everywhere: which windows are lit, tree scales, car starting positions, neon panel heights, bush placement density.
 
-### 7.4 Day/Night Look Variation
-```javascript
-const nightShift = 1 - daylight;
-_tgt.y += nightShift * 8 * streetFactor;  // look up at neon at night
-_tgt.y -= daylight * 2 * streetFactor;     // look slightly down in day
-```
+On top of this, `valueNoise2D` provides smooth noise by interpolating hash values at integer grid points with smoothstep blending. And `fbm2D` (Fractal Brownian Motion) layers 4 octaves of value noise at doubling frequencies and halving amplitudes — this produces the organic, natural-looking patterns used for terrain-like variation.
+
+For color, `sampleNeon` picks from a 4-color palette (cyan, magenta, purple, blue) and shifts the HSL values by a variance parameter, ensuring every neon element has a unique but harmonious color.
 
 ---
 
-## 8. Day/Night Cycle & Sun System
+## Offline Video Recording
 
-### 8.1 Cycle Mathematics
-```javascript
-const cycle = 0.5 + 0.5 * Math.sin(elapsed * (2π / 180) + π/2);
-```
-- **Period**: 180 seconds = full day → night → day
-- **Phase**: `+π/2` starts at cycle=1 (noon/day peak)
-- At t=0: `sin(π/2) = 1` → cycle=1 (day)
-- At t=45s: `sin(π) = 0` → cycle=0.5 (sunset)
-- At t=90s: `sin(3π/2) = -1` → cycle=0 (midnight)
-- At t=135s: `sin(2π) = 0` → cycle=0.5 (sunrise)
-- At t=180s: `sin(5π/2) = 1` → cycle=1 (day again)
+The animation can be recorded to a video file by adding `?record` to the URL. This activates a hardware-independent fixed-timestep renderer:
 
-`daylight = smoothstep(cycle, 0.18, 0.82)` — remaps to [0,1] with smooth transition (not instant day/night switch).
+Instead of using `requestAnimationFrame` (which ties to the monitor's refresh rate and the GPU's rendering speed), the recorder advances time by exactly 1/30th of a second per frame. On a fast machine, this means the recording finishes quickly. On a slow machine, it takes longer, but the output video is identical — every frame is fully rendered before advancing to the next.
 
-### 8.2 Sun Orbit
-Sun position is computed relative to the camera's look direction:
-
-1. **Elevation**: `sunSine = clamp(cycle * 2 - 1, -1, 1)` → `sunY = sunSine * 500`
-   - At noon (cycle=1): sunY=500 (zenith)
-   - At cycle=0.5: sunY=0 (horizon)
-   - At cycle<0.5: sun below horizon (night)
-
-2. **Horizontal position**: Sun orbits at `cos(elevation) * 1200` radius from camera
-   - Toward camera's forward direction (`_lookDir`) — so sunset is visible in frame
-   - Rising sun comes from perpendicular left, setting sun swings toward camera forward
-   - `horizBlend = 1 - |elevation| / (π/2)` — maximum horizontal offset at horizon
-
-3. **Sunset glow**: Large sphere (radius 200) with warm red color, opacity peaks at `horizBlend * daylight * (1-daylight) * 4` — maximum during transition. Sky and fog colors lerp toward warm orange tint.
-
-### 8.3 What Changes with Day/Night
-
-| Property | Day (daylight=1) | Night (nightFactor=1) |
-|----------|-------------------|----------------------|
-| Sky color | `#5a9ec8` (blue) | `#04080f` (dark) |
-| Fog color | `#7ab4cc` | `#04080f` |
-| Fog density | Base × 1.0 | Base × 1.4 |
-| Bloom strength | 0.12 | 0.60 |
-| Bloom threshold | 0.85 | 0.70 |
-| Building emissive | base × 0.18 | base × 1.0 |
-| Neon panel opacity | 0.12 | 0.70 |
-| Road clearcoat | 0.15 | 0.55 |
-| Street lights | 5 | 40 |
-| Accent lights | 2–3 | 22–28 |
-| Stars | hidden | visible, opacity 0.96 |
-| Sun light | 5.0 | 0.0 |
-| Moon light | 0.12 | 0.72 |
-| Env map | Day EXR | Night EXR |
-| Exposure | ~1.30 | ~1.05 |
-
-### 8.4 HUD Cycle Bar
-- Fixed-position bar at bottom of screen
-- Track: CSS gradient (gold → orange → purple → dark → purple → orange → gold) representing day/night spectrum
-- Marker: Circle positioned at `(elapsed % 180) / 180 * 100%` — moves linearly with time
-- Color changes: warm gold during day, cool blue during night
+Technically: `canvas.captureStream(0)` creates a video stream from the canvas with manual frame capture. After each frame renders, `stream.getVideoTracks()[0].requestFrame()` signals that a new frame is ready. A `MediaRecorder` with VP9 codec at 10 Mbps collects all frames. After 5400 frames (180s × 30fps), the recorder stops and the browser downloads a `.webm` file.
 
 ---
 
-## 9. Lighting Architecture
+## Performance Strategy
 
-### 9.1 Light Types Used
-1. **HemisphereLight**: Sky + ground ambient. Intensity 0.25 (night) → 1.35 (day). HSL-shifted per frame
-2. **DirectionalLight × 2**: Sun (intensity 0–5, shadow-casting) and Moon (intensity 0.12–0.72, shadow-casting)
-3. **PointLight × 4 (orbiting accents)**: Magenta + cyan lights orbit the city at mid-altitude, coloring the cityscape
-4. **PointLight × ~20 (street)**: Along boulevard and grand avenue, intensity 5–40
-5. **PointLight × ~120 (lamp posts)**: Along every street/avenue sidewalk, with glow sphere + ground pool
-6. **PointLight × 6 (fountain ring)**: Color-cycling HSL lights around fountain basin
-7. **PointLight per car**: Headlight illumination, range 12
-8. **PointLight per shop sign**: Colored from sign palette, intensity 1.5–10
-9. **PointLight × 10 (rooftop beacons)**: On tallest buildings, range 180, pulsing
+Real-time rendering at 60fps with 60 buildings, 150+ lights, 3500+ particles, and multiple post-processing passes requires careful optimization:
 
-### 9.2 Shadow Strategy
-Only 2 lights cast shadows (sun + moon) — shadow maps are expensive. All other lights contribute illumination without shadows. Shadow maps update every 3rd frame.
+- **Instanced rendering**: The biggest win. 60 buildings become 5 draw calls. 500 neon panels become 1. Trees become 3. Total: ~15 instanced draw calls instead of 1200+ individual ones.
+- **Zero per-frame allocation**: All Color objects, Vector3 scratch variables, and math intermediates are created once at initialization and reused via `.copy()` and `.lerp()`. Garbage collection pauses are eliminated.
+- **Pre-computed arrays**: Rain wind sway values are calculated once, saving 5000 trigonometric calls per frame.
+- **Throttled expensive operations**: Water vertex normals recomputed every 3rd frame. Shadow maps updated every 3rd frame. Visual impact: negligible. Performance impact: significant.
+- **Pixel ratio capped at 1.5**: On a 2x or 3x Retina display, rendering at native resolution would mean 4x–9x the pixels. Capping at 1.5x keeps quality high with manageable GPU load.
+- **Visibility culling**: Stars are completely hidden during bright day (skipping their draw call), fountain spray particles reset on lifetime expiry rather than being checked every frame.
 
 ---
 
-## 10. Vegetation System
+## How to Answer Any Question — Category Guide
 
-### 10.1 Placement Algorithm
-Trees and bushes placed procedurally with multiple constraint checks:
-1. **Building collision**: `bounds.some(b => |x - b.x| < b.hw + 2 && |z - b.z| < b.hd + 2)`
-2. **Fountain exclusion**: `x² + z² < 24²`
-3. **Road collision** (`onAnyRoad`): Check against all streets and avenues with 1-unit buffer
-4. **Cross-road check**: Street trees skip where avenues cross, avenue trees skip where streets cross
-5. **Deduplication**: Min 8-unit spacing between trees
-6. **Hash-based density**: `hash2D(x, z) > threshold` for natural randomness
+**If asked about textures**: Explain PBR texture pipeline — we load 6 types of maps (color, normal, roughness, metalness, AO, emission) from physical material scan sets. Normal maps create surface detail without geometry. Roughness/metalness feed the Cook-Torrance BRDF. We also generate procedural textures at runtime using Canvas2D for windows, signs, billboards. Anisotropic filtering at level 8 keeps textures sharp at oblique angles.
 
-### 10.2 Rendering
-3 `InstancedMesh` objects = **3 draw calls** for all vegetation:
-- Trunks: `CylinderGeometry(0.15, 0.2, 3, 6)` — brown
-- Canopies: `SphereGeometry(1.8, 8, 6)` — dark green
-- Bushes: `SphereGeometry(0.8, 6, 4)` — darker green
+**If asked about reflections**: Two systems. (1) Environment-map reflections via EXR images processed by PMREMGenerator into roughness-dependent mip chains — smooth surfaces get sharp reflections, rough ones get blurry reflections. (2) Clearcoat material on roads and puddles adds a second specular layer for wet-look reflections. Fresnel effect (Schlick approximation) makes surfaces more reflective at grazing angles.
 
----
+**If asked about motion/animation**: Three motion systems. Camera follows a Catmull-Rom spline (49 waypoints, closed loop, centripetal parameterization). Cars use constant velocity with precomputed blocked intervals for collision avoidance. Sun orbits using trigonometric functions tied to the sinusoidal day/night cycle, positioned relative to camera look direction. Plus: orbiting accent lights, pulsing beacons, water vertex displacement, particle physics, cloud drift — all driven by elapsed time and delta time.
 
-## 11. Offline Video Recording
+**If asked about camera**: Catmull-Rom spline is a cubic interpolating curve that passes through every control point. Centripetal parameterization prevents cusps. Closed loop means seamless repeat. We use two parallel curves (position + look target) and add altitude-adaptive behavior via smoothstep blending — no hard thresholds, so the camera transitions smoothly between street-level and aerial behavior.
 
-Accessible via `?record` URL parameter:
-- **Fixed timestep**: Every frame advances exactly `1/30` second regardless of actual rendering time
-- **captureStream(0)**: Canvas stream with manual frame capture — `stream.getVideoTracks()[0].requestFrame()`
-- **MediaRecorder**: VP9 codec, 10 Mbps bitrate, outputs WebM
-- **Total**: 5400 frames (180s × 30fps)
-- **Hardware-independent**: Same output on fast or slow machines — each frame renders fully before advancing
+**If asked about lighting**: 9 categories of lights totaling 150+ light sources. PBR materials respond to lighting via Cook-Torrance BRDF. Two shadow-casting directional lights (sun, moon) with PCF shadow maps. IBL from EXR environment maps. Every light's intensity and color is animated by the day/night cycle. Additive blending on glow objects (neon, lamps, fog) produces physically correct light accumulation.
 
----
+**If asked about the world/scene construction**: Entirely procedural — no scene editor. 5 themed districts with 60 hand-placed buildings. 12-road grid system. Constraint-based vegetation placement. Central fountain with animated water. ~88 cars with collision-free lanes. Everything built from code using 3D primitives (boxes, cylinders, spheres, planes) plus PBR materials plus procedural decorations.
 
-## 12. Performance Optimizations
+**If asked about shaders**: We wrote a custom GLSL fragment shader for post-processing (chromatic aberration, film grain, vignette). The PBR lighting shader (provided by the framework but we control all its inputs) implements Cook-Torrance with GGX, Schlick Fresnel, and Smith geometry terms. Bloom is a multi-pass Gaussian blur on bright pixels. All shader parameters are animated.
 
-1. **InstancedMesh**: 60 buildings → 5 draw calls. 500 neon panels → 1 draw call. Trees → 3 draw calls
-2. **Hoisted Color constants**: `_fogNight`, `_fogDay`, etc. created once, `.copy().lerp()` per frame — zero allocation
-3. **Scratch vectors**: `_lookDir`, `_perpDir`, `_sunDir`, `_negPerp` reused every frame — zero Vector3 allocation
-4. **Pre-computed arrays**: Rain `windX[]`, `windZ[]` — eliminates 2500 × 2 trig calls per frame
-5. **Throttled vertex normals**: Water `computeVertexNormals()` every 3rd frame only
-6. **Shadow map throttle**: Update every 3rd frame via `shadowMap.autoUpdate` toggle
-7. **Pixel ratio cap**: `Math.min(devicePixelRatio, 1.5)` — prevents 2x/3x rendering on high-DPI screens
-8. **Star visibility toggle**: `starPoints.visible = false` when nightFactor < 0.05 — skips draw call entirely
-9. **frustumCulled = false** on particles: Prevents per-frame bounding sphere recalculation for always-visible effects
-10. **Return refs, not clones**: Camera system returns scratch vector references instead of `.clone()` — eliminates 120 allocations/second
+**If asked about CG concepts demonstrated**: Rendering pipeline (vertex/fragment processing, rasterization, depth buffer), affine transformations (model/view/projection matrices), PBR lighting (Cook-Torrance BRDF), texture mapping (UV, normal maps, procedural textures), shadow mapping (PCF), image-based lighting (PMREM), post-processing (bloom, custom GLSL), particle systems (Euler integration), spline interpolation (Catmull-Rom), exponential fog, alpha and additive blending, tone mapping (ACES filmic), color space management (sRGB), instanced rendering.
 
----
+**If asked about external objects**: We load two GLTF models (car and street lamp) using GLTFLoader. Each is cloned per placement with unique material properties (car paint color, lamp position). Fallback procedural geometry is used if loading fails — the scene works with or without the external assets.
 
-## 13. Utility Functions (Noise & Procedural)
-
-- **hash2D(x, z)**: `fract(sin(x * 127.1 + z * 311.7) * 43758.5453)` — deterministic pseudo-random from 2D coordinates. Used for building placement variance, window on/off, tree scale, car start positions
-- **valueNoise2D**: Bilinear interpolation of hash2D at integer grid points with smoothstep blending
-- **fbm2D**: Fractal Brownian Motion — 4 octaves of valueNoise2D at increasing frequency/decreasing amplitude. Produces natural-looking terrain variation
-- **neonPalette**: 4 base colors (cyan `#19f9ff`, magenta `#ff3df2`, purple `#7a5cff`, blue `#2e7bff`)
-- **sampleNeon**: Selects from palette by index, shifts HSL by variance parameter — ensures every neon element has a unique but harmonious color
-
----
-
-## 14. Quick-Reference: How to Answer Viva Questions
-
-### "How did you make the buildings?"
-60 hand-placed buildings with explicit coordinates across 5 districts. Each is a BoxGeometry with PBR materials (color, normal, roughness, metalness, AO, emission maps). Procedural window emissive textures generated via canvas. InstancedMesh groups buildings by material type for efficient rendering (5 draw calls instead of 60). Decorated with neon panels, strips, shop signs, billboards, and rooftop beacons.
-
-### "How does the sun/moon/timeline work?"
-Sinusoidal cycle: `0.5 + 0.5 * sin(t * 2π/180 + π/2)` — starts day, reaches midnight at 90s, returns to day at 180s. Sun position computed from elevation angle + camera look direction so sunset is visible. Moon is fixed at (-300, 280, -600). Sky, fog, lighting, bloom all interpolate between day/night presets. HUD bar shows linear progress.
-
-### "How do the cars move?"
-~88 cars on named roads with defined lanes, directions, speeds. Constant velocity with wrap-around at ±420 units. Building/fountain collisions precomputed as blocked intervals per lane at initialization — cars teleport past blocked zones. Zero per-frame collision testing.
-
-### "How does the camera work?"
-CatmullRomCurve3 spline with 49 waypoints forming a closed loop. Separate position and look-target curves. 180s loop synced to day/night cycle. Altitude-adaptive behavior via smoothstep: street-level adds subtle head motion and neon-gazing; high altitude adds bird-like banking sway.
-
-### "What textures did you use?"
-PBR texture sets from ambientCG: asphalt (roads), paving stone (sidewalks), concrete, 3 facade types, metal. Each set includes color, normal, roughness maps; some include metalness, AO, emission. Plus 4 procedural canvas textures: window grids, shop signs, holographic billboards, crosswalk stripes, cloud puffs.
-
-### "How does reflection work?"
-Two mechanisms: (1) EXR environment maps processed by PMREMGenerator — rough surfaces see blurry reflections, smooth surfaces see sharp ones (PBR standard). (2) MeshPhysicalMaterial clearcoat on roads and puddles — adds a second specular layer for wet-surface reflections. Metalness controls Fresnel reflectivity.
-
-### "What lighting effects are there?"
-9 light types (hemisphere, 2 directional, 4 orbiting point, ~150 street/lamp/beacon/shop/car point lights). Post-processing: bloom (UnrealBloomPass), chromatic aberration, film grain, vignette. Additive blending on all glow objects. All lights dynamically animated by time and day/night cycle.
-
-### "How did you load external objects?"
-GLTFLoader for car model (Car.glb) and street lamp (sci-fi_street_lamp.glb). Fallback box-geometry versions if load fails. Cars: cloned per instance with unique paint color applied to all child meshes. Lamps: cloned per street position.
-
-### "What CG concepts are demonstrated?"
-Rendering pipeline (vertex/fragment shaders, rasterization, depth buffer), affine transformations (model/view/projection matrices, instanced transforms), PBR lighting (Cook-Torrance BRDF, GGX distribution, Schlick Fresnel), texture mapping (UV, normal maps, procedural textures), shadow mapping (PCF, orthographic frustum), IBL (EXR → PMREM), post-processing (bloom, custom GLSL shader), particle systems (physics simulation, Euler integration), spline interpolation (Catmull-Rom), fog (exponential), alpha/additive blending, tone mapping (ACES filmic), color space (sRGB gamma).
-
-### "How did you make the world?"
-Procedural city generation with 5 themed districts around a central fountain plaza. 7 east-west streets + 5 north-south avenues forming a grid. Buildings placed with explicit coordinates respecting road clearances. Vegetation uses multi-layered constraint checks (building AABB, road collision, cross-road check, fountain exclusion). Everything built from code — no scene editor.
-
-### "What about Blender equivalences?"
-We implement in code what Blender provides via GUI: Principled BSDF = our MeshStandardMaterial with PBR maps; Particle System = our BufferGeometry+Points with physics; Keyframe Animation = our spline curves + sinusoidal oscillations; Compositor = our EffectComposer; HDRI Lighting = our EXR+PMREMGenerator. We understand the underlying math because we wrote it.
-
-### "How is motion implemented?"
-Three motion systems: (1) Camera: spline interpolation along closed curve at constant speed; (2) Cars: constant velocity on lanes with precomputed collision avoidance; (3) Sun: orbital arc computed from sinusoidal day/night cycle, positioned relative to camera look direction. Plus animated elements: orbiting accent lights, pulsing beacons, drifting fog, rotating fountain mist, water vertex displacement, cloud drift.
-
-### "How did you optimize performance?"
-InstancedMesh (5 draw calls for 60 buildings), hoisted Color/Vector3 constants (zero per-frame allocation), pre-computed rain wind arrays (eliminates 5000 trig calls/frame), throttled vertex normals (every 3rd frame), throttled shadow maps (every 3rd frame), pixel ratio cap (1.5), star visibility culling, return refs instead of clones.
+**If asked why not Blender/Unity**: Every CG concept listed above was implemented in code. In an editor, you adjust sliders and get results. In our project, we write the math. We understand what Cook-Torrance BRDF does because we set its parameters. We understand shadow mapping because we configure the shadow camera, resolution, and update frequency. We understand splines because we placed 49 waypoints and tuned the parameterization. The code IS the understanding.
