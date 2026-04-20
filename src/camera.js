@@ -11,16 +11,10 @@ export function createFlyThroughCamera(camera) {
   const _pos = new THREE.Vector3();
   const _tgt = new THREE.Vector3();
 
-  // Mild smoothstep — fast enough start, still smooth transitions
-  // Avoids the very slow quadratic start of 2*t*t
-  function smoothEase(t) {
-    return t * t * (3 - 2 * t);
-  }
-
   return {
     update(elapsed, daylight) {
-      const raw = (elapsed % DURATION) / DURATION;
-      const t = smoothEase(raw);
+      // Linear t — closed CatmullRom curve is already smooth at the seam
+      const t = (elapsed % DURATION) / DURATION;
 
       posCurve.getPoint(t, _pos);
       tgtCurve.getPoint(t, _tgt);
@@ -31,21 +25,22 @@ export function createFlyThroughCamera(camera) {
       const dl = typeof daylight === "number" ? daylight : 0.5;
       const nightShift = 1 - dl;
       const altitude = _pos.y;
-      const isStreetLevel = altitude < 30;
 
-      if (isStreetLevel) {
-        // Night at street level: look up at neon, slight tilt to passing signs
-        _tgt.y += nightShift * 8;
-        _tgt.x += Math.sin(elapsed * 0.3) * nightShift * 6;
-        // Day at street level: look more at ground-level details (trees, cars, sidewalks)
-        _tgt.y -= dl * 2;
-      } else if (altitude > 200) {
-        // High altitude night: look toward brightest neon cluster (entertainment east)
-        _tgt.x += nightShift * 15;
-        // High altitude day: wider panoramic sweep
-        _tgt.x += Math.sin(elapsed * 0.08) * dl * 20;
-        _tgt.z += Math.cos(elapsed * 0.06) * dl * 15;
-      }
+      // Smooth altitude blend factors — no hard thresholds
+      // streetFactor: 1 at ground, fades to 0 by altitude 60
+      const streetFactor = 1 - THREE.MathUtils.smoothstep(altitude, 10, 60);
+      // highFactor: 0 below 150, fades to 1 by altitude 250
+      const highFactor = THREE.MathUtils.smoothstep(altitude, 150, 250);
+
+      // Street-level offsets (blended)
+      _tgt.y += nightShift * 8 * streetFactor;
+      _tgt.x += Math.sin(elapsed * 0.3) * nightShift * 6 * streetFactor;
+      _tgt.y -= dl * 2 * streetFactor;
+
+      // High-altitude offsets (blended)
+      _tgt.x += nightShift * 15 * highFactor;
+      _tgt.x += Math.sin(elapsed * 0.08) * dl * 20 * highFactor;
+      _tgt.z += Math.cos(elapsed * 0.06) * dl * 15 * highFactor;
 
       // Altitude-based sway: more at high altitude, minimal at street level
       const swayScale = THREE.MathUtils.clamp(altitude / 400, 0, 1);
