@@ -177,9 +177,20 @@ const cycleMarker = document.getElementById("cycleMarker");
 // Cycle period — 180s for full day→night→day
 const CYCLE_PERIOD = 180;
 
+// Recording constants
+const RECORD = new URLSearchParams(window.location.search).has("record");
+const RECORD_FPS = 30;
+const RECORD_DT = 1 / RECORD_FPS;
+const TOTAL_FRAMES = CYCLE_PERIOD * RECORD_FPS;
+
 function animate() {
-  const delta = Math.min(clock.getDelta(), 0.05); // Cap delta — prevents spiral on tab-switch
-  elapsed += delta;
+  let delta;
+  if (RECORD) {
+    delta = RECORD_DT; // fixed timestep
+  } else {
+    delta = Math.min(clock.getDelta(), 0.05);
+    elapsed += delta;
+  }
 
   // Day/night cycle — full cycle in CYCLE_PERIOD seconds
   // Phase PI/2 so it starts day, goes night at midpoint, returns to day
@@ -321,7 +332,48 @@ function animate() {
   rain.object.material.opacity = rainIntensity;
 
   post.composer.render();
-  requestAnimationFrame(animate);
+
+  if (!RECORD) {
+    requestAnimationFrame(animate);
+  }
 }
 
-animate();
+// ── Offline video recorder — fixed timestep, hardware-independent ────────────
+if (RECORD) {
+  const stream = canvas.captureStream(0); // 0 = manual frame capture
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, {
+    mimeType: "video/webm;codecs=vp9",
+    videoBitsPerSecond: 10_000_000,
+  });
+  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, { type: "video/webm" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "neon_city.webm";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  recorder.start();
+
+  let frame = 0;
+  function renderFrame() {
+    if (frame >= TOTAL_FRAMES) {
+      recorder.stop();
+      return;
+    }
+    // Fixed timestep — each frame advances exactly 1/30s regardless of real time
+    elapsed = frame * RECORD_DT;
+    animate();
+    // Signal captureStream to grab this frame
+    stream.getVideoTracks()[0].requestFrame();
+    frame++;
+    // Yield to browser to flush the frame, then continue
+    setTimeout(renderFrame, 0);
+  }
+  renderFrame();
+} else {
+  animate();
+}
