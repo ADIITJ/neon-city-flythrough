@@ -23,6 +23,14 @@ const A = {
   pineBushes: "assets/3_pine_bushes.glb",
 };
 
+// Hoisted Color constants — avoid per-frame allocation
+const _cityFogNight = new THREE.Color("#221030");
+const _cityFogDay   = new THREE.Color("#585e64");
+const _roadNight    = new THREE.Color("#30363c");
+const _roadDay      = new THREE.Color("#454e56");
+const _groundNight  = new THREE.Color("#2a3a1e");
+const _groundDay    = new THREE.Color("#4a5e34");
+
 const TL = new THREE.TextureLoader();
 function tex(path, rx = 1, ry = 1) {
   const t = TL.load(path);
@@ -1299,15 +1307,17 @@ export function createCity(scene) {
   // ─────────────────────────────────────────────────────────────────────────
   // ANIMATE
   // ─────────────────────────────────────────────────────────────────────────
+  let _frameCount = 0;
+  const _emissiveBases = [0.55, 0.65, 0.30, 0.20, 0.90];
   return {
     group: root,
     buildingBounds: bounds,
 
     update(t, mood = 1) {
+      _frameCount++;
       // Building emissive — per-district intensities, base glow even in day
-      const emissiveBases = [0.55, 0.65, 0.30, 0.20, 0.90];
       facadeMats.forEach((m, i) => {
-        m.emissiveIntensity = emissiveBases[i] * (0.18 + mood * 0.82);
+        m.emissiveIntensity = _emissiveBases[i] * (0.18 + mood * 0.82);
       });
 
       // Neon geometry — base glow during day
@@ -1318,15 +1328,12 @@ export function createCity(scene) {
 
       // Road wetness at night
       roadMat.clearcoat = 0.15 + mood * 0.40;
-      roadMat.color.setStyle(mood > 0.5 ? "#30363c" : "#454e56");
-      // Ground054 is MeshStandardMaterial — no clearcoat, tint shifts night/day
-      groundMat.color.setStyle(mood > 0.5 ? "#2a3a1e" : "#4a5e34");
+      roadMat.color.copy(_roadNight).lerp(_roadDay, 1 - mood);
+      groundMat.color.copy(_groundNight).lerp(_groundDay, 1 - mood);
 
       // Fog tone: warm purple at night, cool gray day
-      const fogNight = new THREE.Color("#221030");
-      const fogDay   = new THREE.Color("#585e64");
       fogVols.forEach(f => {
-        f.material.color.copy(fogNight).lerp(fogDay, 1 - mood);
+        f.material.color.copy(_cityFogNight).lerp(_cityFogDay, 1 - mood);
         f.material.opacity = 0.045 + mood * 0.045;
       });
 
@@ -1352,7 +1359,7 @@ export function createCity(scene) {
         wPos.array[i * 3 + 1] = waterBaseY[i * 3 + 1] + wave1 + wave2 + wave3;
       }
       wPos.needsUpdate = true;
-      waterGeo.computeVertexNormals();
+      if (_frameCount % 3 === 0) waterGeo.computeVertexNormals();
       // Upper tier ripples — vigorous splashing from central jet impacts
       const w2Pos = water2Geo.attributes.position;
       for (let i = 0; i < w2Pos.count; i++) {
@@ -1362,7 +1369,7 @@ export function createCity(scene) {
         w2Pos.array[i * 3 + 1] = water2BaseY[i * 3 + 1] + w;
       }
       w2Pos.needsUpdate = true;
-      water2Geo.computeVertexNormals();
+      if (_frameCount % 3 === 0) water2Geo.computeVertexNormals();
 
       // Cascade shimmer — pulsing water overflow
       cascade1.material.opacity = 0.12 + 0.08 * Math.sin(t * 2.5) + mood * 0.08;

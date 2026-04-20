@@ -68,7 +68,8 @@ const starMat = new THREE.PointsMaterial({
   color: "#e8f0ff", size: 1.6, sizeAttenuation: false,
   transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending,
 });
-scene.add(new THREE.Points(starGeo, starMat));
+const starPoints = new THREE.Points(starGeo, starMat);
+scene.add(starPoints);
 
 // ── Moon — visible high up when camera starts descent ─────────────────────────
 // Positioned NW, at high altitude, visible during opening sky shot
@@ -149,8 +150,11 @@ window.addEventListener("resize", () => {
   post.resize(window.innerWidth, window.innerHeight);
 });
 
-// ── Smart rendering helpers ────────────────────────────────────────────────────
-let lastCamHeight = -1;
+// ── Hoisted Color constants (avoid per-frame allocation) ──────────────────────
+const _fogNight = new THREE.Color("#04080f");
+const _fogDay   = new THREE.Color("#7ab4cc");
+const _bgNight  = new THREE.Color("#04080f");
+const _bgDay    = new THREE.Color("#5a9ec8");
 
 function animate() {
   const delta = Math.min(clock.getDelta(), 0.05); // Cap delta — prevents spiral on tab-switch
@@ -170,10 +174,8 @@ function animate() {
   const altFactor = THREE.MathUtils.clamp(camH / 300, 0, 1);
   const fogDensity = THREE.MathUtils.lerp(0.0012, 0.0003, altFactor);
   scene.fog.density = fogDensity * (1 + nightFactor * 0.4);
-  const fogNight = new THREE.Color("#04080f");
-  const fogDay   = new THREE.Color("#7ab4cc");
-  scene.fog.color.copy(fogNight).lerp(fogDay, daylight);
-  scene.background.copy(tempColor.copy(new THREE.Color("#04080f")).lerp(new THREE.Color("#5a9ec8"), daylight));
+  scene.fog.color.copy(_fogNight).lerp(_fogDay, daylight);
+  scene.background.copy(tempColor.copy(_bgNight).lerp(_bgDay, daylight));
 
   // Env map swap — only when daylight crosses threshold
   if (daylight > 0.5 && dayEnv  && scene.environment !== dayEnv)  scene.environment = dayEnv;
@@ -182,7 +184,8 @@ function animate() {
   // Environment intensity
   if (scene.environment) scene.environmentIntensity = 0.35 + daylight * 0.65;
 
-  // Celestial
+  // Celestial — hide stars entirely during bright day
+  starPoints.visible = nightFactor > 0.05;
   starMat.opacity = 0.04 + nightFactor * 0.92;
   moonGlow.material.opacity = 0.02 + nightFactor * 0.07;
   sunMesh.material.opacity  = daylight * 0.95;

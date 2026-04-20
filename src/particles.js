@@ -41,6 +41,14 @@ export function createRainSystem() {
     velocities[i] = 120 + Math.random() * 160;
   }
 
+  // Precompute per-particle wind sway to avoid Math.sin/cos per frame
+  const windX = new Float32Array(count);
+  const windZ = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    windX[i] = Math.sin(i * 12.9898) * 2.5;
+    windZ[i] = Math.cos(i * 4.123) * 8;
+  }
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
@@ -57,9 +65,9 @@ export function createRainSystem() {
     update(delta, anchor) {
       const pos = geo.attributes.position;
       for (let i = 0; i < count; i++) {
-        pos.array[i * 3]     += Math.sin(i * 12.9898) * delta * 2.5;
+        pos.array[i * 3]     += windX[i] * delta;
         pos.array[i * 3 + 1] -= velocities[i] * delta;
-        pos.array[i * 3 + 2] += Math.cos(i * 4.123) * delta * 8;
+        pos.array[i * 3 + 2] += windZ[i] * delta;
         if (pos.array[i * 3 + 1] < 0) {
           pos.array[i * 3 + 1] = 180 + Math.random() * 100;
           pos.array[i * 3]     = (Math.random() - 0.5) * 280;
@@ -106,6 +114,10 @@ export function createAtmosphereLayers(scene) {
     },
   };
 }
+
+// Hoisted Color constants for cloud tinting
+const _cloudNightHue = new THREE.Color("#8090a8");
+const _cloudDayHue   = new THREE.Color("#d8e8f8");
 
 // ── Cloud layer ───────────────────────────────────────────────────────────────
 // Camera descends from y=400 through clouds (y=180–280) to street (y=6)
@@ -166,9 +178,7 @@ export function createCloudLayer(scene) {
         cl.mesh.material.opacity = cl.baseOpacity * dayBoost * proximity * 1.8;
 
         // Tint: blueish at night, white/cream in day
-        const nightHue = new THREE.Color("#8090a8");
-        const dayHue   = new THREE.Color("#d8e8f8");
-        cl.mesh.material.color.copy(nightHue).lerp(dayHue, daylight);
+        cl.mesh.material.color.copy(_cloudNightHue).lerp(_cloudDayHue, daylight);
       });
     },
   };
