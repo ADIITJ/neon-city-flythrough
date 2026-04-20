@@ -230,10 +230,10 @@ function animate() {
   moonLight.intensity = 0.12 + nightFactor * 0.6;
   sunLight.intensity  = daylight * 5.0;
   // Accent lights: visible during day (subtle) and strong at night
-  rimLight.intensity  = 2.0 + nightFactor * 14;
-  fillLight.intensity = 1.5 + nightFactor * 10;
-  cyaLight.intensity  = 2.5 + nightFactor * 18;
-  magLight.intensity  = 2.0 + nightFactor * 16;
+  rimLight.intensity  = 2.5 + nightFactor * 22;
+  fillLight.intensity = 2.0 + nightFactor * 16;
+  cyaLight.intensity  = 3.0 + nightFactor * 28;
+  magLight.intensity  = 2.5 + nightFactor * 24;
 
   // Smarter shadow updates: only update every 3 frames when static
   shadowUpdateCounter++;
@@ -248,7 +248,7 @@ function animate() {
   magLight.position.set(-280 + Math.cos(et * 0.06) * 110, 46, -150 + Math.sin(et * 0.06) * 110);
 
   // Particles & city
-  city.update(elapsed, nightFactor, camH);
+  city.update(elapsed, nightFactor);
   rain.update(delta, camState.position);
   fountain.update(delta, nightFactor);
   atmosphere.update(elapsed, camera.position, nightFactor);

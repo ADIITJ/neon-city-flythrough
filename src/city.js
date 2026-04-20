@@ -18,7 +18,6 @@ const A = {
   metal:      { col: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Color.jpg",        nrm: "assets/Metal032_1K-JPG/Metal032_1K-JPG_NormalGL.jpg",        rgh: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Roughness.jpg",        mtl: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Metalness.jpg" },
   car: "assets/Car.glb",
   lamp: "assets/sci-fi_street_lamp.glb",
-  pineTree: "assets/3_pine_bushes.glb",
 };
 
 // Hoisted Color constants — avoid per-frame allocation
@@ -1137,36 +1136,6 @@ export function createCity(scene) {
 
   vegGroup.add(trunkInst, canopyInst, bushInst);
 
-  // Proximity-triggered GLB load — only fetch the 2.1MB model when camera
-  // descends below y=120 (trees aren't visible from high altitude anyway).
-  // Instanced spheres serve as immediate fallback until then.
-  const allSpots = [...treeSpots.map(sp => ({ ...sp, scale: sp.fountain ? 0.6 + hash2D(sp.x, sp.z) * 0.3 : 0.8 + hash2D(sp.x, sp.z) * 0.5, glbScale: 0.012 })),
-                    ...bushSpots.map(sp => ({ ...sp, scale: 0.5 + hash2D(sp.x + 7, sp.z + 3) * 0.4, glbScale: 0.008 }))];
-  let vegLoadState = 0; // 0=waiting, 1=loading, 2=done
-  function triggerVegLoad() {
-    if (vegLoadState !== 0) return;
-    vegLoadState = 1;
-    loader.load(A.pineTree, gltf => {
-      const tmpl = gltf.scene;
-      tmpl.traverse(ch => { if (ch.isMesh) { ch.castShadow = true; ch.receiveShadow = true; } });
-      const shared = [];
-      tmpl.traverse(ch => { if (ch.isMesh) shared.push({ geo: ch.geometry, mat: ch.material }); });
-      allSpots.forEach(sp => {
-        const clone = tmpl.clone();
-        let idx = 0;
-        clone.traverse(ch => { if (ch.isMesh && idx < shared.length) { ch.geometry = shared[idx].geo; ch.material = shared[idx].mat; idx++; } });
-        clone.scale.setScalar(sp.scale * sp.glbScale);
-        clone.position.set(sp.x, 0, sp.z);
-        clone.rotation.y = sp.ry;
-        vegGroup.add(clone);
-      });
-      vegGroup.remove(trunkInst, canopyInst, bushInst);
-      trunkGeo.dispose(); canopyGeo.dispose(); bushGeo.dispose();
-      trunkMat.dispose(); canopyMat.dispose(); bushMat.dispose();
-      vegLoadState = 2;
-    }, undefined, (err) => { console.error("Failed to load pine tree GLB:", err); vegLoadState = 0; });
-  }
-
   // ── CARS ───────────────────────────────────────────────────────────────
   // 120 cars, weighted heavily on main boulevard + grand avenue
   // Colour palette: dark jewel tones for main, neon accent for entertainment district
@@ -1299,25 +1268,23 @@ export function createCity(scene) {
   // ANIMATE
   // ─────────────────────────────────────────────────────────────────────────
   let _frameCount = 0;
-  const _emissiveBases = [0.55, 0.65, 0.30, 0.20, 0.90];
+  const _emissiveBases = [0.70, 0.80, 0.45, 0.35, 1.10];
   return {
     group: root,
     buildingBounds: bounds,
 
-    update(t, mood = 1, camY = 400) {
+    update(t, mood = 1) {
       _frameCount++;
-      // Trigger GLB vegetation load when camera descends near tree level
-      if (camY < 120) triggerVegLoad();
       // Building emissive — per-district intensities, base glow even in day
       facadeMats.forEach((m, i) => {
         m.emissiveIntensity = _emissiveBases[i] * (0.18 + mood * 0.82);
       });
 
       // Neon geometry — base glow during day
-      panMat.opacity  = 0.10 + mood * 0.44 + Math.sin(t * 1.7) * 0.03 * mood;
-      stripMat.opacity = 0.08 + mood * 0.42;
-      neonEdgeMat.opacity = 0.06 + mood * 0.14;
-      spillMat.opacity = 0.04 + mood * 0.07;
+      panMat.opacity  = 0.12 + mood * 0.58 + Math.sin(t * 1.7) * 0.04 * mood;
+      stripMat.opacity = 0.10 + mood * 0.55;
+      neonEdgeMat.opacity = 0.08 + mood * 0.22;
+      spillMat.opacity = 0.05 + mood * 0.12;
 
       // Road wetness at night
       roadMat.clearcoat = 0.15 + mood * 0.40;
@@ -1404,7 +1371,7 @@ export function createCity(scene) {
       shopSigns.forEach((s, i) => {
         s.mesh.material.opacity = 0.15 + mood * 0.68 + Math.sin(t * 2.0 + s.phase) * 0.05 * mood;
       });
-      shopLights.forEach(sl => { sl.intensity = 1.2 + mood * 5.8; });
+      shopLights.forEach(sl => { sl.intensity = 1.5 + mood * 8.5; });
 
       // Billboards — glow day and night
       billboards.forEach(b => {
@@ -1412,7 +1379,7 @@ export function createCity(scene) {
       });
 
       // Street PointLights — visible day (subtle warm) and night (bright)
-      streetLights.forEach(sl => { sl.intensity = 4 + mood * 24; });
+      streetLights.forEach(sl => { sl.intensity = 5 + mood * 35; });
 
       // Lamp glow — subtle during day, bright at night
       lampData.forEach(ld => {
