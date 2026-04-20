@@ -162,7 +162,7 @@ function animate() {
   const daylight    = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
   const nightFactor = 1.0 - daylight;
 
-  const camState = flyThrough.update(elapsed);
+  const camState = flyThrough.update(elapsed, daylight);
   const camH = camera.position.y;
 
   // Smarter fog: exponential, density based on altitude
