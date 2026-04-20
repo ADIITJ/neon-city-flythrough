@@ -89,10 +89,61 @@ h1 {
   color: var(--hud-muted);
 }
 
+/* Day/night cycle indicator */
+.cycle-bar {
+  position: fixed;
+  bottom: clamp(0.8rem, 1.5vw, 1.2rem);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  background: rgba(5, 8, 22, 0.5);
+  border: 1px solid var(--hud-border);
+  border-radius: 20px;
+  backdrop-filter: blur(12px);
+}
+
+.cycle-track {
+  width: 6rem;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cycle-fill {
+  height: 100%;
+  width: 50%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #ffcc40, #ff6040);
+  transition: width 0.3s ease, background 0.5s ease;
+}
+
+.cycle-labels {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hud-muted);
+  min-width: 3.2rem;
+}
+
+.cycle-icon {
+  font-size: 0.75rem;
+}
+
 @media (max-width: 640px) {
   .hud {
     right: 1rem;
     left: 1rem;
     max-width: none;
+  }
+  .cycle-track {
+    width: 4rem;
   }
 }

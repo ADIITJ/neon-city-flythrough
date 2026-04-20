@@ -156,6 +156,11 @@ const _fogDay   = new THREE.Color("#7ab4cc");
 const _bgNight  = new THREE.Color("#04080f");
 const _bgDay    = new THREE.Color("#5a9ec8");
 
+// Day/night cycle bar DOM refs
+const cycleFill  = document.getElementById("cycleFill");
+const cycleIcon  = document.getElementById("cycleIcon");
+const cycleLabel = document.getElementById("cycleLabel");
+
 function animate() {
   const delta = Math.min(clock.getDelta(), 0.05); // Cap delta — prevents spiral on tab-switch
   elapsed += delta;
@@ -165,6 +170,18 @@ function animate() {
   const cycle = 0.5 + 0.5 * Math.sin(elapsed * 0.021 + Math.PI / 2);
   const daylight    = THREE.MathUtils.smoothstep(cycle, 0.18, 0.82);
   const nightFactor = 1.0 - daylight;
+
+  // Update cycle bar
+  cycleFill.style.width = `${daylight * 100}%`;
+  if (daylight > 0.5) {
+    cycleFill.style.background = "linear-gradient(90deg, #ffcc40, #ff8830)";
+    cycleIcon.textContent = "\u2600";
+    cycleLabel.textContent = "Day";
+  } else {
+    cycleFill.style.background = "linear-gradient(90deg, #4060c0, #8040d0)";
+    cycleIcon.textContent = "\u263E";
+    cycleLabel.textContent = "Night";
+  }
 
   const camState = flyThrough.update(elapsed, daylight);
   const camH = camera.position.y;
@@ -197,11 +214,11 @@ function animate() {
   const altExp = THREE.MathUtils.lerp(1.0, 0.80, altFactor);
   renderer.toneMappingExposure = altExp * (0.85 + daylight * 0.45 + nightFactor * 0.20) + streetExpBoost;
 
-  // Bloom — visible glow during day too, stronger at night
+  // Bloom — visible glow during day, much stronger neon bloom at night
   post.setBloom(
-    0.10 + nightFactor * 0.22,
-    0.18 + nightFactor * 0.16,
-    0.88 - nightFactor * 0.05   // 0.88 day → 0.83 night
+    0.12 + nightFactor * 0.48,   // 0.12 day → 0.60 night (was 0.32)
+    0.20 + nightFactor * 0.30,   // 0.20 day → 0.50 night (was 0.34)
+    0.85 - nightFactor * 0.15    // 0.85 day → 0.70 night (lower = more glow)
   );
   post.updateTime(elapsed);
 
@@ -231,7 +248,7 @@ function animate() {
   magLight.position.set(-280 + Math.cos(et * 0.06) * 110, 46, -150 + Math.sin(et * 0.06) * 110);
 
   // Particles & city
-  city.update(elapsed, nightFactor);
+  city.update(elapsed, nightFactor, camH);
   rain.update(delta, camState.position);
   fountain.update(delta, nightFactor);
   atmosphere.update(elapsed, camera.position, nightFactor);

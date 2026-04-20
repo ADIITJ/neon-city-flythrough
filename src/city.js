@@ -18,6 +18,7 @@ const A = {
   metal:      { col: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Color.jpg",        nrm: "assets/Metal032_1K-JPG/Metal032_1K-JPG_NormalGL.jpg",        rgh: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Roughness.jpg",        mtl: "assets/Metal032_1K-JPG/Metal032_1K-JPG_Metalness.jpg" },
   car: "assets/Car.glb",
   lamp: "assets/sci-fi_street_lamp.glb",
+  pineTree: "assets/3_pine_bushes.glb",
 };
 
 // Hoisted Color constants — avoid per-frame allocation
@@ -1136,6 +1137,36 @@ export function createCity(scene) {
 
   vegGroup.add(trunkInst, canopyInst, bushInst);
 
+  // Proximity-triggered GLB load — only fetch the 2.1MB model when camera
+  // descends below y=120 (trees aren't visible from high altitude anyway).
+  // Instanced spheres serve as immediate fallback until then.
+  const allSpots = [...treeSpots.map(sp => ({ ...sp, scale: sp.fountain ? 0.6 + hash2D(sp.x, sp.z) * 0.3 : 0.8 + hash2D(sp.x, sp.z) * 0.5, glbScale: 0.012 })),
+                    ...bushSpots.map(sp => ({ ...sp, scale: 0.5 + hash2D(sp.x + 7, sp.z + 3) * 0.4, glbScale: 0.008 }))];
+  let vegLoadState = 0; // 0=waiting, 1=loading, 2=done
+  function triggerVegLoad() {
+    if (vegLoadState !== 0) return;
+    vegLoadState = 1;
+    loader.load(A.pineTree, gltf => {
+      const tmpl = gltf.scene;
+      tmpl.traverse(ch => { if (ch.isMesh) { ch.castShadow = true; ch.receiveShadow = true; } });
+      const shared = [];
+      tmpl.traverse(ch => { if (ch.isMesh) shared.push({ geo: ch.geometry, mat: ch.material }); });
+      allSpots.forEach(sp => {
+        const clone = tmpl.clone();
+        let idx = 0;
+        clone.traverse(ch => { if (ch.isMesh && idx < shared.length) { ch.geometry = shared[idx].geo; ch.material = shared[idx].mat; idx++; } });
+        clone.scale.setScalar(sp.scale * sp.glbScale);
+        clone.position.set(sp.x, 0, sp.z);
+        clone.rotation.y = sp.ry;
+        vegGroup.add(clone);
+      });
+      vegGroup.remove(trunkInst, canopyInst, bushInst);
+      trunkGeo.dispose(); canopyGeo.dispose(); bushGeo.dispose();
+      trunkMat.dispose(); canopyMat.dispose(); bushMat.dispose();
+      vegLoadState = 2;
+    }, undefined, (err) => { console.error("Failed to load pine tree GLB:", err); vegLoadState = 0; });
+  }
+
   // ── CARS ───────────────────────────────────────────────────────────────
   // 120 cars, weighted heavily on main boulevard + grand avenue
   // Colour palette: dark jewel tones for main, neon accent for entertainment district
@@ -1273,8 +1304,10 @@ export function createCity(scene) {
     group: root,
     buildingBounds: bounds,
 
-    update(t, mood = 1) {
+    update(t, mood = 1, camY = 400) {
       _frameCount++;
+      // Trigger GLB vegetation load when camera descends near tree level
+      if (camY < 120) triggerVegLoad();
       // Building emissive — per-district intensities, base glow even in day
       facadeMats.forEach((m, i) => {
         m.emissiveIntensity = _emissiveBases[i] * (0.18 + mood * 0.82);
